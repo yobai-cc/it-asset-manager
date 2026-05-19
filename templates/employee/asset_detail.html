@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}资产详情 - IT 资产管理{% endblock %}
+{% block content %}
+<div id="assetDetail"><p>加载中...</p></div>
+{% endblock %}
+{% block scripts %}
+<script>
+const assetId = {{ asset_id }};
+const statusLabels = {in_stock:'库存',assigned:'在用',maintenance:'维修中',scrapped:'已报废'};
+const statusClasses = {in_stock:'badge-instock',assigned:'badge-assigned',maintenance:'badge-maintenance',scrapped:'badge-scrapped'};
+const catLabels = {computer:'电脑',monitor:'显示器',phone:'手机',tablet:'平板',printer:'打印机',server:'服务器',network:'网络设备',firewall:'防火墙',switch:'交换机'};
+const eventNames = {stock_in:'入库',assign:'分配',return:'归还',transfer:'转移',maintenance_start:'送修',maintenance_end:'维修完成',scrap:'报废',label_print:'打印标签'};
+
+async function loadDetail() {
+    const data = await apiFetch(`/api/assets/${assetId}`);
+    let eventsHtml = '';
+    if (data.events && data.events.length) {
+        eventsHtml = '<div class="timeline">';
+        data.events.forEach(e => {
+            const d = new Date(e.created_at);
+            eventsHtml += `<div class="timeline-item">
+                <div class="timeline-dot"></div>
+                <div class="timeline-content">
+                    <div class="timeline-title">${eventNames[e.event_type]||e.event_type}</div>
+                    <div class="timeline-meta">${d.toLocaleString('zh-CN')}</div>
+                </div>
+            </div>`;
+        });
+        eventsHtml += '</div>';
+    } else {
+        eventsHtml = '<p class="text-muted">暂无生命周期事件</p>';
+    }
+
+    document.getElementById('assetDetail').innerHTML = `
+        <h2>${data.asset_tag}</h2>
+        <span class="badge ${statusClasses[data.status]}">${statusLabels[data.status]}</span>
+        <table class="detail-table">
+            <tr><th>名称</th><td>${data.name}</td></tr>
+            <tr><th>类别</th><td>${catLabels[data.category]||data.category}</td></tr>
+            <tr><th>品牌</th><td>${data.brand||'-'}</td></tr>
+            <tr><th>型号</th><td>${data.model||'-'}</td></tr>
+            <tr><th>序列号</th><td>${data.serial_number||'-'}</td></tr>
+            <tr><th>位置</th><td>${data.location||'-'}</td></tr>
+            <tr><th>备注</th><td>${data.notes||'-'}</td></tr>
+        </table>
+        <h3 style="margin-top:24px;">生命周期时间线</h3>
+        ${eventsHtml}
+        <div style="margin-top:16px;">
+            <a href="/my/assets" class="btn btn-secondary">返回我的资产</a>
+        </div>
+    `;
+}
+
+loadDetail();
+</script>
+{% endblock %}

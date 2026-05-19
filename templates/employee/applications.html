@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}我的申请 - IT 资产管理{% endblock %}
+{% block content %}
+<h2>我的申请 <a href="/my/applications/new" class="btn btn-primary btn-sm">提交新申请</a></h2>
+<table class="table">
+    <thead><tr><th>资产类别</th><th>理由</th><th>状态</th><th>审批备注</th><th>时间</th></tr></thead>
+    <tbody id="appBody"></tbody>
+</table>
+{% endblock %}
+{% block scripts %}
+<script>
+const statusLabels = {pending:'待审批',approved:'已批准',rejected:'已驳回',fulfilled:'已履行'};
+const statusClasses = {pending:'badge-maintenance',approved:'badge-instock',rejected:'badge-scrapped',fulfilled:'badge-assigned'};
+const catLabels = {computer:'电脑',monitor:'显示器',phone:'手机',tablet:'平板',printer:'打印机',server:'服务器',network:'网络设备',firewall:'防火墙',switch:'交换机'};
+
+async function loadApps() {
+    const data = await apiFetch('/api/my/applications');
+    const tbody = document.getElementById('appBody');
+    tbody.innerHTML = '';
+    data.applications.forEach(a => {
+        tbody.innerHTML += `<tr>
+            <td>${catLabels[a.asset_category]||a.asset_category||'-'}</td>
+            <td>${a.reason}</td>
+            <td><span class="badge ${statusClasses[a.status]}">${statusLabels[a.status]}</span></td>
+            <td>${a.admin_notes||'-'}</td>
+            <td>${new Date(a.created_at).toLocaleString('zh-CN')}</td>
+        </tr>`;
+    });
+}
+
+loadApps();
+</script>
+{% endblock %}

@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录 - IT 资产管理</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="login-page">
+    <div class="login-card">
+        <h1>IT 资产管理</h1>
+        <p class="login-subtitle">请输入工号和密码登录</p>
+        <form id="loginForm">
+            <div class="form-group">
+                <label for="employee_id">工号</label>
+                <input type="text" id="employee_id" name="employee_id" required placeholder="请输入工号">
+            </div>
+            <div class="form-group">
+                <label for="password">密码</label>
+                <input type="password" id="password" name="password" required placeholder="请输入密码">
+            </div>
+            <button type="submit" class="btn btn-primary btn-block">登录</button>
+        </form>
+        <p id="loginError" class="error-text" style="display:none;"></p>
+        <div class="login-hint">
+            <p>演示账号：</p>
+            <p>管理员: admin / admin123</p>
+            <p>员工: emp001 / emp001</p>
+        </div>
+    </div>
+    <script>
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const empId = document.getElementById('employee_id').value;
+        const pwd = document.getElementById('password').value;
+        const errEl = document.getElementById('loginError');
+        try {
+            const res = await fetch('/api/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ employee_id: empId, password: pwd }),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                errEl.textContent = data.error || '登录失败';
+                errEl.style.display = 'block';
+                return;
+            }
+            if (data.user.role === 'admin') {
+                location.href = '/dashboard';
+            } else {
+                location.href = '/my/assets';
+            }
+        } catch (err) {
+            errEl.textContent = '网络错误';
+            errEl.style.display = 'block';
+        }
+    });
+    </script>
+</body>
+</html>

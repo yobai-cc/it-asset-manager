@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}IT 资产管理{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <a href="/">IT 资产管理</a>
+        </div>
+        <div class="nav-links" id="navLinks">
+            {% if user %}
+            {% if user.role == 'admin' %}
+            <a href="/dashboard">仪表盘</a>
+            <a href="/assets">资产列表</a>
+            <a href="/assets/new">新增资产</a>
+            <a href="/applications">申请审核</a>
+            <a href="/maintenance">维修总览</a>
+            {% else %}
+            <a href="/my/assets">我的资产</a>
+            <a href="/my/applications">我的申请</a>
+            <a href="/my/applications/new">提交申请</a>
+            {% endif %}
+            <span class="nav-user">{{ user.name }} ({{ '管理员' if user.role == 'admin' else '员工' }})</span>
+            <a href="#" onclick="fetch('/api/logout',{method:'POST'}).then(()=>location='/login')">退出</a>
+            {% endif %}
+        </div>
+        <button class="nav-toggle" onclick="document.getElementById('navLinks').classList.toggle('show')">
+            ☰
+        </button>
+    </nav>
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+    <footer class="footer">
+        <p>IT 资产管理系统 MVP</p>
+    </footer>
+    <script>
+    // 通用工具函数
+    async function apiFetch(url, options = {}) {
+        const res = await fetch(url, {
+            headers: { 'Content-Type': 'application/json', ...options.headers },
+            ...options,
+        });
+        const data = await res.json();
+        if (!res.ok) {
+            alert(data.error || '操作失败');
+            throw new Error(data.error);
+        }
+        return data;
+    }
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

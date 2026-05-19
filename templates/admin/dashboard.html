@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}仪表盘 - IT 资产管理{% endblock %}
+{% block content %}
+<h2>仪表盘</h2>
+<div class="stats-grid" id="statsGrid">
+    <div class="stat-card"><div class="stat-num" id="totalNum">-</div><div class="stat-label">总资产</div></div>
+    <div class="stat-card stat-assigned"><div class="stat-num" id="assignedNum">-</div><div class="stat-label">在用</div></div>
+    <div class="stat-card stat-instock"><div class="stat-num" id="instockNum">-</div><div class="stat-label">库存</div></div>
+    <div class="stat-card stat-maintenance"><div class="stat-num" id="maintenanceNum">-</div><div class="stat-label">维修中</div></div>
+    <div class="stat-card stat-scrapped"><div class="stat-num" id="scrappedNum">-</div><div class="stat-label">已报废</div></div>
+</div>
+<div class="dashboard-section">
+    <h3>按分类统计</h3>
+    <div id="categoryChart" class="category-chart"></div>
+</div>
+<div class="dashboard-section">
+    <h3>最近事件</h3>
+    <table class="table" id="recentEvents">
+        <thead><tr><th>时间</th><th>资产</th><th>事件</th><th>操作人</th></tr></thead>
+        <tbody></tbody>
+    </table>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(async () => {
+    const data = await apiFetch('/api/stats');
+    document.getElementById('totalNum').textContent = data.total;
+    document.getElementById('assignedNum').textContent = data.assigned;
+    document.getElementById('instockNum').textContent = data.in_stock;
+    document.getElementById('maintenanceNum').textContent = data.maintenance;
+    document.getElementById('scrappedNum').textContent = data.scrapped;
+
+    const catEl = document.getElementById('categoryChart');
+    const catNames = {computer:'电脑',monitor:'显示器',phone:'手机',tablet:'平板',printer:'打印机',server:'服务器',network:'网络设备',firewall:'防火墙',switch:'交换机'};
+    const maxVal = Math.max(...Object.values(data.by_category), 1);
+    for (const [cat, count] of Object.entries(data.by_category)) {
+        const pct = Math.round(count / maxVal * 100);
+        catEl.innerHTML += `<div class="cat-row"><span class="cat-name">${catNames[cat]||cat}</span><div class="cat-bar-bg"><div class="cat-bar" style="width:${pct}%"></div></div><span class="cat-count">${count}</span></div>`;
+    }
+
+    const eventNames = {stock_in:'入库',assign:'分配',return:'归还',transfer:'转移',maintenance_start:'维修开始',maintenance_end:'维修完成',scrap:'报废',label_print:'打印标签'};
+    const tbody = document.querySelector('#recentEvents tbody');
+    data.recent_events.forEach(e => {
+        const d = new Date(e.created_at);
+        tbody.innerHTML += `<tr><td>${d.toLocaleString('zh-CN')}</td><td>${e.asset_tag}</td><td>${eventNames[e.event_type]||e.event_type}</td><td>${e.operator_name}</td></tr>`;
+    });
+})();
+</script>
+{% endblock %}

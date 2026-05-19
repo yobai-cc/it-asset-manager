@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %}资产列表 - IT 资产管理{% endblock %}
+{% block content %}
+<h2>资产列表 <a href="/assets/new" class="btn btn-primary btn-sm">新增资产</a></h2>
+<div class="filter-bar">
+    <input type="text" id="searchInput" placeholder="搜索标签号/名称/序列号/品牌..." class="input">
+    <select id="categoryFilter" class="input">
+        <option value="">全部类别</option>
+        <option value="computer">电脑</option><option value="monitor">显示器</option>
+        <option value="phone">手机</option><option value="tablet">平板</option>
+        <option value="printer">打印机</option><option value="server">服务器</option>
+        <option value="network">网络设备</option><option value="firewall">防火墙</option>
+        <option value="switch">交换机</option>
+    </select>
+    <select id="statusFilter" class="input">
+        <option value="">全部状态</option>
+        <option value="in_stock">库存</option><option value="assigned">在用</option>
+        <option value="maintenance">维修中</option><option value="scrapped">已报废</option>
+    </select>
+    <button class="btn btn-secondary" onclick="loadAssets()">搜索</button>
+</div>
+<div class="batch-bar" id="batchBar" style="display:none;">
+    <span id="selectedCount">0</span> 项已选
+    <button class="btn btn-secondary btn-sm" onclick="batchPrintLabels()">批量打印标签</button>
+</div>
+<table class="table" id="assetsTable">
+    <thead><tr>
+        <th><input type="checkbox" id="selectAll" onchange="toggleSelectAll(this)"></th>
+        <th>标签号</th><th>名称</th><th>类别</th><th>状态</th><th>持有人</th><th>位置</th><th>操作</th>
+    </tr></thead>
+    <tbody id="assetsBody"></tbody>
+</table>
+<div class="pagination" id="pagination"></div>
+{% endblock %}
+{% block scripts %}
+<script>
+let currentPage = 1;
+const statusLabels = {in_stock:'库存',assigned:'在用',maintenance:'维修中',scrapped:'已报废'};
+const catLabels = {computer:'电脑',monitor:'显示器',phone:'手机',tablet:'平板',printer:'打印机',server:'服务器',network:'网络设备',firewall:'防火墙',switch:'交换机'};
+const statusClasses = {in_stock:'badge-instock',assigned:'badge-assigned',maintenance:'badge-maintenance',scrapped:'badge-scrapped'};
+
+async function loadAssets(page = 1) {
+    currentPage = page;
+    const search = document.getElementById('searchInput').value;
+    const category = document.getElementById('categoryFilter').value;
+    const status = document.getElementById('statusFilter').value;
+    let url = `/api/assets?page=${page}&limit=15`;
+    if (search) url += `&search=${encodeURIComponent(search)}`;
+    if (category) url += `&category=${category}`;
+    if (status) url += `&status=${status}`;
+    const data = await apiFetch(url);
+    const tbody = document.getElementById('assetsBody');
+    tbody.innerHTML = '';
+    data.assets.forEach(a => {
+        tbody.innerHTML += `<tr>
+            <td><input type="checkbox" class="asset-checkbox" value="${a.id}"></td>
+            <td><a href="/assets/${a.id}">${a.asset_tag}</a></td>
+            <td>${a.name}</td>
+            <td>${catLabels[a.category]||a.category}</td>
+            <td><span class="badge ${statusClasses[a.status]}">${statusLabels[a.status]||a.status}</span></td>
+            <td>${a.holder_name||'-'}</td>
+            <td>${a.location||'-'}</td>
+            <td><a href="/assets/${a.id}" class="btn btn-sm btn-secondary">详情</a>
+                <a href="/assets/${a.id}/label" class="btn btn-sm btn-secondary" target="_blank">标签</a></td>
+        </tr>`;
+    });
+    renderPagination(data.total, data.page, data.limit);
+}
+
+function renderPagination(total, page, limit) {
+    const pages = Math.ceil(total / limit);
+    const el = document.getElementById('pagination');
+    if (pages <= 1) { el.innerHTML = ''; return; }
+    let html = '';
+    if (page > 1) html += `<a class="page-btn" onclick="loadAssets(${page-1})">上一页</a>`;
+    for (let i = 1; i <= pages; i++) {
+        html += `<a class="page-btn ${i===page?'active':''}" onclick="loadAssets(${i})">${i}</a>`;
+    }
+    if (page < pages) html += `<a class="page-btn" onclick="loadAssets(${page+1})">下一页</a>`;
+    el.innerHTML = html;
+}
+
+function toggleSelectAll(cb) {
+    document.querySelectorAll('.asset-checkbox').forEach(c => c.checked = cb.checked);
+    updateBatchBar();
+}
+
+document.addEventListener('change', e => {
+    if (e.target.classList.contains('asset-checkbox')) updateBatchBar();
+});
+
+function updateBatchBar() {
+    const checked = document.querySelectorAll('.asset-checkbox:checked');
+    document.getElementById('selectedCount').textContent = checked.length;
+    document.getElementById('batchBar').style.display = checked.length > 0 ? 'block' : 'none';
+}
+
+async function batchPrintLabels() {
+    const ids = [...document.querySelectorAll('.asset-checkbox:checked')].map(c => parseInt(c.value));
+    if (!ids.length) return;
+    const data = await apiFetch('/api/batch-labels', {
+        method: 'POST', body: JSON.stringify({ asset_ids: ids }),
+    });
+    // 打开新窗口显示批量标签
+    const w = window.open('', '_blank');
+    let html = '<html><head><meta charset="UTF-8"><link rel="stylesheet" href="/static/style.css"><title>批量标签</title></head><body class="label-page"><div class="labels-grid">';
+    for (const a of data.assets) {
+        html += `<div class="label-card">
+            <div class="label-asset-tag">${a.asset_tag}</div>
+            <div class="label-name">${a.name}</div>
+            <img src="/api/assets/${a.id}/qr" class="label-qr" alt="QR">
+        </div>`;
+    }
+    html += '</div><button onclick="window.print()" class="btn btn-primary" style="margin:20px;">打印标签</button></body></html>';
+    w.document.write(html);
+    w.document.close();
+}
+
+document.getElementById('searchInput').addEventListener('keydown', e => { if (e.key === 'Enter') loadAssets(); });
+loadAssets();
+</script>
+{% endblock %}

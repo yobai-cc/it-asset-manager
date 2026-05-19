@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}提交申请 - IT 资产管理{% endblock %}
+{% block content %}
+<h2>提交资产申请</h2>
+<form id="appForm" class="form-card">
+    <div class="form-group">
+        <label for="asset_category">申请资产类别</label>
+        <select id="asset_category" class="input">
+            <option value="">不限</option>
+            <option value="computer">电脑</option><option value="monitor">显示器</option>
+            <option value="phone">手机</option><option value="tablet">平板</option>
+            <option value="printer">打印机</option><option value="server">服务器</option>
+            <option value="network">网络设备</option><option value="firewall">防火墙</option>
+            <option value="switch">交换机</option>
+        </select>
+    </div>
+    <div class="form-group">
+        <label for="reason">申请理由 *</label>
+        <textarea id="reason" class="input" rows="4" required placeholder="请说明申请理由..."></textarea>
+    </div>
+    <button type="submit" class="btn btn-primary">提交申请</button>
+    <a href="/my/applications" class="btn btn-secondary">取消</a>
+</form>
+{% endblock %}
+{% block scripts %}
+<script>
+document.getElementById('appForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const body = {
+        asset_category: document.getElementById('asset_category').value,
+        reason: document.getElementById('reason').value,
+    };
+    await apiFetch('/api/my/applications', { method: 'POST', body: JSON.stringify(body) });
+    alert('申请已提交');
+    location.href = '/my/applications';
+});
+</script>
+{% endblock %}

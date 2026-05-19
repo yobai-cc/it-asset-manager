@@ -1,0 +1,279 @@
+{% extends "base.html" %}
+{% block title %}资产详情 - IT 资产管理{% endblock %}
+{% block content %}
+<div id="assetDetail">
+    <p>加载中...</p>
+</div>
+
+<!-- 分配对话框 -->
+<div id="assignModal" class="modal" style="display:none;">
+    <div class="modal-content">
+        <h3>分配资产</h3>
+        <div class="form-group">
+            <label>选择领用人</label>
+            <select id="assignUser" class="input"></select>
+        </div>
+        <div class="form-group">
+            <label>备注</label>
+            <input type="text" id="assignNotes" class="input">
+        </div>
+        <button class="btn btn-primary" onclick="doAssign()">确认分配</button>
+        <button class="btn btn-secondary" onclick="closeModal('assignModal')">取消</button>
+    </div>
+</div>
+
+<!-- 转移对话框 -->
+<div id="transferModal" class="modal" style="display:none;">
+    <div class="modal-content">
+        <h3>转移资产</h3>
+        <div class="form-group">
+            <label>选择接收人</label>
+            <select id="transferUser" class="input"></select>
+        </div>
+        <div class="form-group">
+            <label>备注</label>
+            <input type="text" id="transferNotes" class="input">
+        </div>
+        <button class="btn btn-primary" onclick="doTransfer()">确认转移</button>
+        <button class="btn btn-secondary" onclick="closeModal('transferModal')">取消</button>
+    </div>
+</div>
+
+<!-- 维修对话框 -->
+<div id="maintenanceModal" class="modal" style="display:none;">
+    <div class="modal-content">
+        <h3>送修</h3>
+        <div class="form-group">
+            <label>故障描述 *</label>
+            <textarea id="maintenanceDesc" class="input" rows="3"></textarea>
+        </div>
+        <button class="btn btn-primary" onclick="doMaintenance()">确认送修</button>
+        <button class="btn btn-secondary" onclick="closeModal('maintenanceModal')">取消</button>
+    </div>
+</div>
+
+<!-- 报废对话框 -->
+<div id="scrapModal" class="modal" style="display:none;">
+    <div class="modal-content">
+        <h3>报废资产</h3>
+        <p>确定要报废此资产吗？此操作不可逆。</p>
+        <div class="form-group">
+            <label>备注</label>
+            <textarea id="scrapNotes" class="input" rows="2"></textarea>
+        </div>
+        <button class="btn btn-danger" onclick="doScrap()">确认报废</button>
+        <button class="btn btn-secondary" onclick="closeModal('scrapModal')">取消</button>
+    </div>
+</div>
+
+<!-- 维修完成对话框 -->
+<div id="resolveModal" class="modal" style="display:none;">
+    <div class="modal-content">
+        <h3>维修完成</h3>
+        <input type="hidden" id="resolveRecordId">
+        <div class="form-group">
+            <label>维修费用</label>
+            <input type="number" step="0.01" id="resolveCost" class="input">
+        </div>
+        <div class="form-group">
+            <label>维修备注</label>
+            <textarea id="resolveNotes" class="input" rows="2"></textarea>
+        </div>
+        <div class="form-group">
+            <label><input type="checkbox" id="resolveReturnStock"> 归还库存（而非回到原持有人）</label>
+        </div>
+        <button class="btn btn-primary" onclick="doResolve()">确认完成</button>
+        <button class="btn btn-secondary" onclick="closeModal('resolveModal')">取消</button>
+    </div>
+</div>
+
+<!-- 归还对话框 -->
+<div id="returnModal" class="modal" style="display:none;">
+    <div class="modal-content">
+        <h3>归还资产</h3>
+        <div class="form-group">
+            <label>备注</label>
+            <input type="text" id="returnNotes" class="input">
+        </div>
+        <button class="btn btn-primary" onclick="doReturn()">确认归还</button>
+        <button class="btn btn-secondary" onclick="closeModal('returnModal')">取消</button>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const assetId = {{ asset_id }};
+const statusLabels = {in_stock:'库存',assigned:'在用',maintenance:'维修中',scrapped:'已报废'};
+const statusClasses = {in_stock:'badge-instock',assigned:'badge-assigned',maintenance:'badge-maintenance',scrapped:'badge-scrapped'};
+const catLabels = {computer:'电脑',monitor:'显示器',phone:'手机',tablet:'平板',printer:'打印机',server:'服务器',network:'网络设备',firewall:'防火墙',switch:'交换机'};
+const eventNames = {stock_in:'入库',assign:'分配',return:'归还',transfer:'转移',maintenance_start:'送修',maintenance_end:'维修完成',scrap:'报废',label_print:'打印标签'};
+
+async function loadDetail() {
+    const data = await apiFetch(`/api/assets/${assetId}`);
+    const el = document.getElementById('assetDetail');
+    let btns = '';
+    if (data.status === 'in_stock') {
+        btns += `<button class="btn btn-primary" onclick="openModal('assignModal')">分配</button>`;
+    }
+    if (data.status === 'assigned') {
+        btns += `<button class="btn btn-secondary" onclick="openModal('returnModal')">归还</button>`;
+        btns += `<button class="btn btn-secondary" onclick="openModal('transferModal')">转移</button>`;
+        btns += `<button class="btn btn-warning" onclick="openModal('maintenanceModal')">送修</button>`;
+    }
+    if (data.status === 'maintenance') {
+        btns += `<button class="btn btn-primary" onclick="openResolveModal()">维修完成</button>`;
+    }
+    if (data.status !== 'scrapped') {
+        btns += `<button class="btn btn-danger" onclick="openModal('scrapModal')">报废</button>`;
+    }
+    btns += `<a href="/assets/${assetId}/label" class="btn btn-secondary" target="_blank">打印标签</a>`;
+    btns += `<a href="/assets/${assetId}/edit" class="btn btn-secondary">编辑</a>`;
+
+    let eventsHtml = '';
+    if (data.events && data.events.length) {
+        eventsHtml = '<div class="timeline">';
+        data.events.forEach(e => {
+            const d = new Date(e.created_at);
+            eventsHtml += `<div class="timeline-item">
+                <div class="timeline-dot"></div>
+                <div class="timeline-content">
+                    <div class="timeline-title">${eventNames[e.event_type]||e.event_type}</div>
+                    <div class="timeline-meta">${d.toLocaleString('zh-CN')} · ${e.operator_name||''} ${e.notes ? '· '+e.notes : ''}</div>
+                </div>
+            </div>`;
+        });
+        eventsHtml += '</div>';
+    } else {
+        eventsHtml = '<p class="text-muted">暂无生命周期事件</p>';
+    }
+
+    let maintHtml = '';
+    if (data.maintenance_records && data.maintenance_records.length) {
+        maintHtml = '<table class="table"><thead><tr><th>日期</th><th>描述</th><th>状态</th><th>费用</th><th>备注</th></tr></thead><tbody>';
+        data.maintenance_records.forEach(m => {
+            const ms = {pending:'待处理',in_progress:'进行中',resolved:'已完成'};
+            maintHtml += `<tr><td>${new Date(m.created_at).toLocaleDateString('zh-CN')}</td><td>${m.description}</td><td>${ms[m.status]||m.status}</td><td>${m.cost||'-'}</td><td>${m.repair_notes||'-'}</td></tr>`;
+        });
+        maintHtml += '</tbody></table>';
+    } else {
+        maintHtml = '<p class="text-muted">暂无维修记录</p>';
+    }
+
+    el.innerHTML = `
+        <div class="detail-header">
+            <h2>${data.asset_tag} - ${data.name}</h2>
+            <span class="badge ${statusClasses[data.status]}">${statusLabels[data.status]}</span>
+        </div>
+        <div class="detail-actions">${btns}</div>
+        <div class="detail-grid">
+            <div class="detail-section">
+                <h3>基本信息</h3>
+                <table class="detail-table">
+                    <tr><th>类别</th><td>${catLabels[data.category]||data.category}</td></tr>
+                    <tr><th>品牌</th><td>${data.brand||'-'}</td></tr>
+                    <tr><th>型号</th><td>${data.model||'-'}</td></tr>
+                    <tr><th>序列号</th><td>${data.serial_number||'-'}</td></tr>
+                    <tr><th>持有人</th><td>${data.holder_name||'-'}</td></tr>
+                    <tr><th>位置</th><td>${data.location||'-'}</td></tr>
+                    <tr><th>购入日期</th><td>${data.purchase_date||'-'}</td></tr>
+                    <tr><th>购入价格</th><td>${data.purchase_price?'¥'+data.purchase_price:'-'}</td></tr>
+                    <tr><th>备注</th><td>${data.notes||'-'}</td></tr>
+                </table>
+            </div>
+        </div>
+        <div class="detail-section">
+            <h3>生命周期时间线</h3>
+            ${eventsHtml}
+        </div>
+        <div class="detail-section">
+            <h3>维修记录</h3>
+            ${maintHtml}
+        </div>
+    `;
+
+    // 加载用户列表用于分配/转移
+    const usersRes = await apiFetch('/api/stats');
+    // 从 API 获取用户 - 简化: 从维护记录中取
+}
+
+function openModal(id) { document.getElementById(id).style.display = 'flex'; }
+function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+
+async function loadUsers(selectId) {
+    const sel = document.getElementById(selectId);
+    if (sel.options.length > 1) return;
+    // 简化：从 my/assets 借助已有数据，实际应加 /api/users 端点
+    // 临时方案：直接从数据库端查询
+    const res = await fetch('/api/users');
+    if (!res.ok) return;
+    const data = await res.json();
+    sel.innerHTML = '<option value="">请选择</option>';
+    data.users.forEach(u => {
+        sel.innerHTML += `<option value="${u.id}">${u.name} (${u.employee_id})</option>`;
+    });
+}
+
+async function doAssign() {
+    const uid = document.getElementById('assignUser').value;
+    const notes = document.getElementById('assignNotes').value;
+    await apiFetch(`/api/assets/${assetId}/assign`, {method:'POST', body:JSON.stringify({target_user_id:parseInt(uid), notes})});
+    closeModal('assignModal');
+    loadDetail();
+}
+
+async function doReturn() {
+    const notes = document.getElementById('returnNotes').value;
+    await apiFetch(`/api/assets/${assetId}/return`, {method:'POST', body:JSON.stringify({notes})});
+    closeModal('returnModal');
+    loadDetail();
+}
+
+async function doTransfer() {
+    const uid = document.getElementById('transferUser').value;
+    const notes = document.getElementById('transferNotes').value;
+    await apiFetch(`/api/assets/${assetId}/transfer`, {method:'POST', body:JSON.stringify({target_user_id:parseInt(uid), notes})});
+    closeModal('transferModal');
+    loadDetail();
+}
+
+async function doMaintenance() {
+    const desc = document.getElementById('maintenanceDesc').value;
+    await apiFetch(`/api/assets/${assetId}/maintenance`, {method:'POST', body:JSON.stringify({description:desc})});
+    closeModal('maintenanceModal');
+    loadDetail();
+}
+
+async function doScrap() {
+    const notes = document.getElementById('scrapNotes').value;
+    await apiFetch(`/api/assets/${assetId}/scrap`, {method:'POST', body:JSON.stringify({notes})});
+    closeModal('scrapModal');
+    loadDetail();
+}
+
+function openResolveModal() {
+    // 找到最近的 in_progress 维修记录
+    openModal('resolveModal');
+}
+
+async function doResolve() {
+    const cost = document.getElementById('resolveCost').value;
+    const notes = document.getElementById('resolveNotes').value;
+    const returnStock = document.getElementById('resolveReturnStock').checked;
+    // 获取维修记录 ID
+    const data = await apiFetch(`/api/assets/${assetId}`);
+    const record = data.maintenance_records.find(r => r.status === 'in_progress');
+    if (!record) { alert('未找到进行中的维修记录'); return; }
+    await apiFetch(`/api/assets/${assetId}/maintenance/${record.id}/resolve`, {
+        method:'POST', body:JSON.stringify({cost:cost?parseFloat(cost):null, repair_notes:notes, return_to_stock:returnStock}),
+    });
+    closeModal('resolveModal');
+    loadDetail();
+}
+
+// 暴露 loadUsers 供 modal 打开时调用
+document.getElementById('assignModal').addEventListener('click', () => loadUsers('assignUser'));
+document.getElementById('transferModal').addEventListener('click', () => loadUsers('transferUser'));
+
+loadDetail();
+</script>
+{% endblock %}

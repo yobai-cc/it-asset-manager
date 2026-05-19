@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}我的资产 - IT 资产管理{% endblock %}
+{% block content %}
+<h2>我的资产</h2>
+<div class="filter-bar">
+    <input type="text" id="searchInput" placeholder="搜索资产..." class="input" onkeydown="if(event.key==='Enter')loadMyAssets()">
+    <button class="btn btn-secondary" onclick="loadMyAssets()">搜索</button>
+</div>
+<div id="myAssetsList"></div>
+{% endblock %}
+{% block scripts %}
+<script>
+const statusLabels = {in_stock:'库存',assigned:'在用',maintenance:'维修中',scrapped:'已报废'};
+const statusClasses = {in_stock:'badge-instock',assigned:'badge-assigned',maintenance:'badge-maintenance',scrapped:'badge-scrapped'};
+const catLabels = {computer:'电脑',monitor:'显示器',phone:'手机',tablet:'平板',printer:'打印机',server:'服务器',network:'网络设备',firewall:'防火墙',switch:'交换机'};
+
+async function loadMyAssets() {
+    const search = document.getElementById('searchInput').value;
+    let url = '/api/my/assets';
+    if (search) url += `?search=${encodeURIComponent(search)}`;
+    const data = await apiFetch(url);
+    const el = document.getElementById('myAssetsList');
+    if (!data.assets.length) {
+        el.innerHTML = '<p class="text-muted">暂无名下资产</p>';
+        return;
+    }
+    let html = '<div class="asset-cards">';
+    data.assets.forEach(a => {
+        html += `<a href="/my/assets/${a.id}" class="asset-card-link">
+            <div class="asset-card">
+                <div class="asset-card-tag">${a.asset_tag}</div>
+                <div class="asset-card-name">${a.name}</div>
+                <div class="asset-card-meta">${catLabels[a.category]||a.category} · ${a.location||'未知位置'}</div>
+            </div>
+        </a>`;
+    });
+    html += '</div>';
+    el.innerHTML = html;
+}
+
+loadMyAssets();
+</script>
+{% endblock %}

@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}申请审核 - IT 资产管理{% endblock %}
+{% block content %}
+<h2>申请审核</h2>
+<div class="filter-bar">
+    <select id="statusFilter" class="input" onchange="loadApplications()">
+        <option value="">全部</option>
+        <option value="pending" selected>待审批</option>
+        <option value="approved">已批准</option>
+        <option value="rejected">已驳回</option>
+    </select>
+</div>
+<table class="table" id="appTable">
+    <thead><tr><th>申请人</th><th>部门</th><th>资产类别</th><th>理由</th><th>状态</th><th>时间</th><th>操作</th></tr></thead>
+    <tbody id="appBody"></tbody>
+</table>
+{% endblock %}
+{% block scripts %}
+<script>
+const statusLabels = {pending:'待审批',approved:'已批准',rejected:'已驳回',fulfilled:'已履行'};
+const statusClasses = {pending:'badge-maintenance',approved:'badge-instock',rejected:'badge-scrapped',fulfilled:'badge-assigned'};
+const catLabels = {computer:'电脑',monitor:'显示器',phone:'手机',tablet:'平板',printer:'打印机',server:'服务器',network:'网络设备',firewall:'防火墙',switch:'交换机'};
+
+async function loadApplications() {
+    const status = document.getElementById('statusFilter').value;
+    let url = '/api/applications';
+    if (status) url += `?status=${status}`;
+    const data = await apiFetch(url);
+    const tbody = document.getElementById('appBody');
+    tbody.innerHTML = '';
+    data.applications.forEach(a => {
+        let actions = '';
+        if (a.status === 'pending') {
+            actions = `<button class="btn btn-sm btn-primary" onclick="approveApp(${a.id})">批准</button>
+                       <button class="btn btn-sm btn-danger" onclick="rejectApp(${a.id})">驳回</button>`;
+        } else {
+            actions = `<span class="text-muted">${a.admin_notes||'-'}</span>`;
+        }
+        tbody.innerHTML += `<tr>
+            <td>${a.applicant_name||'-'}</td>
+            <td>${a.applicant_dept||'-'}</td>
+            <td>${catLabels[a.asset_category]||a.asset_category||'-'}</td>
+            <td>${a.reason}</td>
+            <td><span class="badge ${statusClasses[a.status]}">${statusLabels[a.status]}</span></td>
+            <td>${new Date(a.created_at).toLocaleString('zh-CN')}</td>
+            <td>${actions}</td>
+        </tr>`;
+    });
+}
+
+async function approveApp(id) {
+    const notes = prompt('审批备注（可选）:', '');
+    await apiFetch(`/api/applications/${id}/approve`, {method:'PUT', body:JSON.stringify({admin_notes:notes})});
+    loadApplications();
+}
+
+async function rejectApp(id) {
+    const notes = prompt('驳回理由:', '');
+    if (!notes) return;
+    await apiFetch(`/api/applications/${id}/reject`, {method:'PUT', body:JSON.stringify({admin_notes:notes})});
+    loadApplications();
+}
+
+loadApplications();
+</script>
+{% endblock %}

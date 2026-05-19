@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}维修总览 - IT 资产管理{% endblock %}
+{% block content %}
+<h2>维修总览</h2>
+<div class="filter-bar">
+    <select id="statusFilter" class="input" onchange="loadMaintenance()">
+        <option value="">全部</option>
+        <option value="pending">待处理</option>
+        <option value="in_progress">进行中</option>
+        <option value="resolved">已完成</option>
+    </select>
+</div>
+<table class="table">
+    <thead><tr><th>资产</th><th>报修人</th><th>描述</th><th>状态</th><th>费用</th><th>创建时间</th></tr></thead>
+    <tbody id="maintBody"></tbody>
+</table>
+{% endblock %}
+{% block scripts %}
+<script>
+const ms = {pending:'待处理',in_progress:'进行中',resolved:'已完成'};
+const msClasses = {pending:'badge-maintenance',in_progress:'badge-assigned',resolved:'badge-instock'};
+
+async function loadMaintenance() {
+    const status = document.getElementById('statusFilter').value;
+    let url = '/api/maintenance';
+    if (status) url += `?status=${status}`;
+    const data = await apiFetch(url);
+    const tbody = document.getElementById('maintBody');
+    tbody.innerHTML = '';
+    data.records.forEach(r => {
+        tbody.innerHTML += `<tr>
+            <td><a href="/assets/${r.asset_id}">${r.asset_tag||r.asset_id}</a></td>
+            <td>${r.reporter_name||'-'}</td>
+            <td>${r.description}</td>
+            <td><span class="badge ${msClasses[r.status]}">${ms[r.status]}</span></td>
+            <td>${r.cost?'¥'+r.cost:'-'}</td>
+            <td>${new Date(r.created_at).toLocaleString('zh-CN')}</td>
+        </tr>`;
+    });
+}
+
+loadMaintenance();
+</script>
+{% endblock %}

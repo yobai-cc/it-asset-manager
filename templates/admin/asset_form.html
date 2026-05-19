@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}{% if asset_id %}编辑资产{% else %}新增资产{% endif %} - IT 资产管理{% endblock %}
+{% block content %}
+<h2>{% if asset_id %}编辑资产{% else %}新增资产{% endif %}</h2>
+<form id="assetForm" class="form-card">
+    <input type="hidden" id="assetId" value="{{ asset_id or '' }}">
+    <div class="form-row">
+        <div class="form-group">
+            <label for="name">名称 *</label>
+            <input type="text" id="name" required class="input" placeholder="如: ThinkPad T14s">
+        </div>
+        <div class="form-group">
+            <label for="category">类别 *</label>
+            <select id="category" required class="input">
+                <option value="">请选择</option>
+                <option value="computer">电脑</option><option value="monitor">显示器</option>
+                <option value="phone">手机</option><option value="tablet">平板</option>
+                <option value="printer">打印机</option><option value="server">服务器</option>
+                <option value="network">网络设备</option><option value="firewall">防火墙</option>
+                <option value="switch">交换机</option>
+            </select>
+        </div>
+    </div>
+    <div class="form-row">
+        <div class="form-group">
+            <label for="brand">品牌</label>
+            <input type="text" id="brand" class="input" placeholder="如: Lenovo">
+        </div>
+        <div class="form-group">
+            <label for="model">型号</label>
+            <input type="text" id="model" class="input" placeholder="如: T14s Gen 4">
+        </div>
+    </div>
+    <div class="form-row">
+        <div class="form-group">
+            <label for="serial_number">序列号</label>
+            <input type="text" id="serial_number" class="input">
+        </div>
+        <div class="form-group">
+            <label for="location">存放位置</label>
+            <input type="text" id="location" class="input" placeholder="如: 机房A-01号柜">
+        </div>
+    </div>
+    <div class="form-row">
+        <div class="form-group">
+            <label for="purchase_date">购入日期</label>
+            <input type="date" id="purchase_date" class="input">
+        </div>
+        <div class="form-group">
+            <label for="purchase_price">购入价格</label>
+            <input type="number" step="0.01" id="purchase_price" class="input">
+        </div>
+    </div>
+    <div class="form-group">
+        <label for="notes">备注</label>
+        <textarea id="notes" class="input" rows="3"></textarea>
+    </div>
+    <button type="submit" class="btn btn-primary">保存</button>
+    <a href="/assets" class="btn btn-secondary">取消</a>
+</form>
+{% endblock %}
+{% block scripts %}
+<script>
+const assetId = document.getElementById('assetId').value;
+if (assetId) {
+    apiFetch(`/api/assets/${assetId}`).then(data => {
+        document.getElementById('name').value = data.name || '';
+        document.getElementById('category').value = data.category || '';
+        document.getElementById('brand').value = data.brand || '';
+        document.getElementById('model').value = data.model || '';
+        document.getElementById('serial_number').value = data.serial_number || '';
+        document.getElementById('location').value = data.location || '';
+        document.getElementById('purchase_date').value = data.purchase_date || '';
+        document.getElementById('purchase_price').value = data.purchase_price || '';
+        document.getElementById('notes').value = data.notes || '';
+    });
+}
+
+document.getElementById('assetForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const body = {
+        name: document.getElementById('name').value,
+        category: document.getElementById('category').value,
+        brand: document.getElementById('brand').value,
+        model: document.getElementById('model').value,
+        serial_number: document.getElementById('serial_number').value,
+        location: document.getElementById('location').value,
+        purchase_date: document.getElementById('purchase_date').value,
+        purchase_price: document.getElementById('purchase_price').value || null,
+        notes: document.getElementById('notes').value,
+    };
+    if (assetId) {
+        await apiFetch(`/api/assets/${assetId}`, { method: 'PUT', body: JSON.stringify(body) });
+        alert('更新成功');
+    } else {
+        await apiFetch('/api/assets', { method: 'POST', body: JSON.stringify(body) });
+        alert('创建成功');
+    }
+    location.href = '/assets';
+});
+</script>
+{% endblock %}
