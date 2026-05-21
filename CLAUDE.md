@@ -219,6 +219,9 @@ in_stock ──assign──> assigned ──return──> in_stock
 
 **公开**：`GET /api/public/asset/<id>`（扫码页用，无需认证）
 
+- 公开扫码相关页面只展示最小必要字段，匿名流不得复用 `/api/assets` 列表接口或暴露持有人/部门等敏感数据。
+- 前端渲染数据库内容时优先使用 textContent / createElement；避免把资产字段直接拼进 innerHTML。
+
 ---
 
 ## 前端约定
@@ -280,6 +283,7 @@ const catLabels = {computer:'电脑', monitor:'显示器', ...};
 - 必填列：`name`、`category`（英文值）
 - 自动生成 asset_tag，初始状态为 `in_stock`，创建 `stock_in` 生命周期事件
 - 返回 `{success, errors[], total}`，errors 包含行号和错误信息
+- 导入时必须校验 `status` 是否属于 `VALID_STATUSES`；非法状态要跳过该行并返回行级错误。
 - 导入弹窗在资产列表页，格式与导出 CSV 一致
 - 编码读取 `utf-8-sig`（兼容有 BOM 和无 BOM 的 CSV）
 

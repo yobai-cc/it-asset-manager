@@ -686,6 +686,58 @@ class TestLabelAndQR:
         res = app_client.get("/api/assets/9999/qr")
         assert res.status_code == 404
 
+    def test_public_asset_lookup_returns_minimal_fields(self, app_client, db):
+        """公开扫码查找只返回最小字段，不暴露敏感信息"""
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={"name": "PC", "category": "computer", "brand": "Lenovo", "location": "工位A-01"})
+        aid = res.get_json()["id"]
+
+        lookup = app_client.get("/api/public/asset-lookup", query_string={"asset_tag": res.get_json()["asset_tag"]})
+        assert lookup.status_code == 200
+        data = lookup.get_json()
+        assert set(data.keys()) == {"id", "asset_tag", "name", "category", "status"}
+        assert data["id"] == aid
+
+        pub = app_client.get(f"/api/public/asset/{aid}")
+        assert pub.status_code == 200
+        pub_data = pub.get_json()
+        assert set(pub_data.keys()) == {"id", "asset_tag", "name", "category", "status"}
+
+    def test_scan_pages_use_public_lookup_and_no_asset_listing_leak(self, app_client, db):
+        """扫码页不应把匿名查找导向 /api/assets 列表接口"""
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={"name": "PC", "category": "computer"})
+        aid = res.get_json()["id"]
+
+        scan_page = app_client.get(f"/scan/{aid}")
+        camera_page = app_client.get("/scan")
+        assert scan_page.status_code == 200
+        assert camera_page.status_code == 200
+        assert b"/api/public/asset/" in scan_page.data
+        assert b"/api/public/asset-lookup" in camera_page.data
+        assert b"/api/assets?search=" not in camera_page.data
+
+    def test_csv_import_rejects_invalid_status(self, app_client, db):
+        """CSV 导入遇到非法状态应跳过该行并返回行级错误"""
+        import io
+        seed_test_data(db)
+        login_admin(app_client)
+        csv_text = "name,category,status\nBad PC,computer,unknown\nGood PC,computer,in_stock\n"
+        data = {
+            "file": (io.BytesIO(csv_text.encode("utf-8")), "assets.csv"),
+        }
+        res = app_client.post("/api/assets/import", data=data, content_type="multipart/form-data")
+        assert res.status_code == 200
+        payload = res.get_json()
+        assert payload["success"] == 1
+        assert payload["total"] == 2
+        assert any("无效状态" in err["error"] for err in payload["errors"])
+        with db.get_conn() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM asset WHERE name = 'Good PC'").fetchone()[0] == 1
+            assert conn.execute("SELECT COUNT(*) FROM asset WHERE name = 'Bad PC'").fetchone()[0] == 0
+
 
 # ---- 新增增强功能回归测试 ----
 

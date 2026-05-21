@@ -65,6 +65,7 @@
     <div id="labelContent"></div>
     <script>
     const assetId = {{ asset_id }};
+    const labelFieldLabels = {name:'名称',serial_number:'序列号',holder:'持有人',location:'位置',brand:'品牌',model:'型号'};
     Promise.all([
         fetch(`/api/assets/${assetId}`).then(r => r.json()),
         fetch('/api/settings/label').then(r => r.json()),
@@ -73,29 +74,46 @@
         const fields = settings.fields || ['name'];
         const logoUrl = logoData.logo || '';
 
-        let fieldsHtml = '';
-        fields.forEach(f => {
-            const val = f === 'holder' ? (data.holder_name || '') : (data[f] || '');
-            if (val) fieldsHtml += `<div class="label-field">${val}</div>`;
-        });
+        const card = document.createElement('div');
+        card.className = 'label-card';
 
-        let logoHtml = '';
+        const left = document.createElement('div');
+        left.className = 'label-left';
+
         if (logoUrl) {
-            logoHtml = `<img src="${logoUrl}" class="label-logo" alt="Logo">`;
+            const logo = document.createElement('img');
+            logo.src = logoUrl;
+            logo.className = 'label-logo';
+            logo.alt = 'Logo';
+            left.appendChild(logo);
         }
 
-        document.getElementById('labelContent').innerHTML = `
-            <div class="label-card">
-                <div class="label-left">
-                    ${logoHtml}
-                    <div class="label-asset-tag">${data.asset_tag}</div>
-                    ${fieldsHtml}
-                </div>
-                <div class="label-right">
-                    <img src="/api/assets/${assetId}/qr" class="label-qr" alt="QR">
-                </div>
-            </div>
-        `;
+        const tag = document.createElement('div');
+        tag.className = 'label-asset-tag';
+        tag.textContent = data.asset_tag;
+        left.appendChild(tag);
+
+        fields.forEach(f => {
+            const val = f === 'holder' ? (data.holder_name || '') : (data[f] || '');
+            if (val) {
+                const field = document.createElement('div');
+                field.className = 'label-field';
+                field.textContent = val;
+                left.appendChild(field);
+            }
+        });
+
+        const right = document.createElement('div');
+        right.className = 'label-right';
+        const qr = document.createElement('img');
+        qr.src = `/api/assets/${assetId}/qr`;
+        qr.className = 'label-qr';
+        qr.alt = 'QR';
+        right.appendChild(qr);
+
+        card.appendChild(left);
+        card.appendChild(right);
+        document.getElementById('labelContent').replaceChildren(card);
     });
     </script>
 </body>

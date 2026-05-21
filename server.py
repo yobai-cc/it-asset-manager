@@ -6,7 +6,7 @@ import os
 from flask import Flask, g, jsonify, request, render_template, redirect, url_for, session, Response
 from werkzeug.security import check_password_hash
 from models import (
-    Database, VALID_CATEGORIES, STATE_TRANSITIONS,
+    Database, VALID_CATEGORIES, VALID_STATUSES, STATE_TRANSITIONS,
     log_activity, get_categories_meta, LABEL_FIELDS_DEFAULT,
 )
 
@@ -294,11 +294,15 @@ def api_assets_import():
         for i, row in enumerate(reader, start=2):
             name = (row.get("name") or "").strip()
             category = (row.get("category") or "").strip()
+            status = (row.get("status") or "").strip() or "in_stock"
             if not name or not category:
                 errors.append({"row": i, "error": "名称或分类为空"})
                 continue
             if category not in VALID_CATEGORIES:
                 errors.append({"row": i, "error": f"无效分类: {category}"})
+                continue
+            if status not in VALID_STATUSES:
+                errors.append({"row": i, "error": f"无效状态: {status}"})
                 continue
             try:
                 asset_tag = db.generate_asset_tag(conn, category)
@@ -311,7 +315,7 @@ def api_assets_import():
                         (row.get("brand") or "").strip() or None,
                         (row.get("model") or "").strip() or None,
                         (row.get("serial_number") or "").strip() or None,
-                        (row.get("status") or "").strip() or "in_stock",
+                        status,
                         (row.get("location") or "").strip() or None,
                         (row.get("purchase_date") or "").strip() or None,
                         row.get("purchase_price") or None,
@@ -1005,6 +1009,16 @@ def _asset_dict(row):
     return d
 
 
+def _public_asset_dict(row):
+    return {
+        "id": row["id"],
+        "asset_tag": row["asset_tag"],
+        "name": row["name"],
+        "category": row["category"],
+        "status": row["status"],
+    }
+
+
 # ---- API: 分类元数据 ----
 
 @app.route("/api/categories")
@@ -1242,16 +1256,32 @@ def api_public_asset(asset_id):
     db = get_db()
     with db.get_conn() as conn:
         row = conn.execute(
-            """SELECT a.asset_tag, a.name, a.category, a.status, a.location,
-                      a.brand, a.model, a.warranty_date,
-                      u.name as holder_name, u.department as holder_dept
-               FROM asset a LEFT JOIN "user" u ON a.current_holder_id = u.id
-               WHERE a.id = ?""",
+            """SELECT id, asset_tag, name, category, status
+               FROM asset
+               WHERE id = ?""",
             (asset_id,),
         ).fetchone()
         if not row:
             return jsonify({"error": "资产不存在"}), 404
-    return jsonify(dict(row))
+    return jsonify(_public_asset_dict(row))
+
+
+@app.route("/api/public/asset-lookup")
+def api_public_asset_lookup():
+    asset_tag = (request.args.get("asset_tag") or request.args.get("tag") or "").strip()
+    if not asset_tag:
+        return jsonify({"error": "缺少 asset_tag"}), 400
+    db = get_db()
+    with db.get_conn() as conn:
+        row = conn.execute(
+            """SELECT id, asset_tag, name, category, status
+               FROM asset
+               WHERE asset_tag = ? COLLATE NOCASE""",
+            (asset_tag,),
+        ).fetchone()
+        if not row:
+            return jsonify({"error": "资产不存在"}), 404
+    return jsonify(_public_asset_dict(row))
 
 
 # ---- 页面路由：新功能 ----

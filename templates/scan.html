@@ -33,11 +33,116 @@
     const statusLabels = {in_stock:'库存',assigned:'在用',maintenance:'维修中',scrapped:'已报废'};
     const statusClasses = {in_stock:'badge-instock',assigned:'badge-assigned',maintenance:'badge-maintenance',scrapped:'badge-scrapped'};
 
+    function addLine(parent, text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        parent.appendChild(div);
+    }
+
+    function buildScanCard(asset, user) {
+        const wrapper = document.getElementById('scanContent');
+        wrapper.replaceChildren();
+
+        const header = document.createElement('div');
+        header.className = 'scan-header';
+        header.textContent = 'IT 资产管理';
+        wrapper.appendChild(header);
+
+        const card = document.createElement('div');
+        card.className = 'scan-card';
+
+        const tag = document.createElement('div');
+        tag.className = 'scan-tag';
+        tag.textContent = `${catIcons[asset.category] || ''} ${asset.asset_tag}`.trim();
+        card.appendChild(tag);
+
+        const name = document.createElement('div');
+        name.className = 'scan-name';
+        name.textContent = asset.name;
+        card.appendChild(name);
+
+        const statusWrap = document.createElement('div');
+        statusWrap.className = 'scan-status';
+        const badge = document.createElement('span');
+        badge.className = `badge ${statusClasses[asset.status] || ''}`.trim();
+        badge.textContent = statusLabels[asset.status] || asset.status;
+        statusWrap.appendChild(badge);
+        card.appendChild(statusWrap);
+
+        const meta = document.createElement('div');
+        meta.className = 'scan-meta';
+        if (asset.brand) addLine(meta, asset.brand + (asset.model ? ' ' + asset.model : ''));
+        addLine(meta, '分类：' + (catLabels[asset.category] || asset.category));
+        if (asset.holder_name) {
+            addLine(meta, '持有人：' + asset.holder_name + (asset.holder_dept ? ' (' + asset.holder_dept + ')' : ''));
+        }
+        addLine(meta, '位置：' + (asset.location || '-'));
+        card.appendChild(meta);
+
+        wrapper.appendChild(card);
+
+        if (!user) {
+            const prompt = document.createElement('div');
+            prompt.className = 'scan-card login-prompt';
+            const p = document.createElement('p');
+            p.className = 'text-muted';
+            p.style.marginBottom = '12px';
+            p.textContent = '登录后可查看更多信息和操作';
+            const a = document.createElement('a');
+            a.href = '/login';
+            a.className = 'btn btn-primary btn-block';
+            a.textContent = '登录';
+            prompt.appendChild(p);
+            prompt.appendChild(a);
+            wrapper.appendChild(prompt);
+        } else if (user.role === 'admin') {
+            const adminCard = document.createElement('div');
+            adminCard.className = 'scan-card';
+            const p = document.createElement('p');
+            p.style.marginBottom = '12px';
+            p.textContent = '管理员：' + user.name;
+            const actions = document.createElement('div');
+            actions.className = 'scan-actions';
+            const a = document.createElement('a');
+            a.href = '/assets/' + assetId;
+            a.className = 'btn btn-primary';
+            a.textContent = '查看详情 / 操作';
+            actions.appendChild(a);
+            adminCard.appendChild(p);
+            adminCard.appendChild(actions);
+            wrapper.appendChild(adminCard);
+        } else {
+            const empCard = document.createElement('div');
+            empCard.className = 'scan-card';
+            const p = document.createElement('p');
+            p.style.marginBottom = '12px';
+            p.textContent = user.name + '，你好';
+            const actions = document.createElement('div');
+            actions.className = 'scan-actions';
+            const a1 = document.createElement('a');
+            a1.href = '/my/assets';
+            a1.className = 'btn btn-secondary';
+            a1.textContent = '我的资产';
+            const a2 = document.createElement('a');
+            a2.href = '/my/applications/new';
+            a2.className = 'btn btn-primary';
+            a2.textContent = '申请资产';
+            actions.appendChild(a1);
+            actions.appendChild(a2);
+            empCard.appendChild(p);
+            empCard.appendChild(actions);
+            wrapper.appendChild(empCard);
+        }
+    }
+
     async function init() {
         const el = document.getElementById('scanContent');
         try {
             const pubRes = await fetch(`/api/public/asset/${assetId}`);
-            if (!pubRes.ok) { el.innerHTML = '<div class="scan-card"><p>资产不存在或已被删除</p></div>'; return; }
+            if (!pubRes.ok) {
+                el.innerHTML = '<div class="scan-card"><p>资产不存在或已被删除</p></div>';
+                return;
+            }
             const asset = await pubRes.json();
 
             let user = null;
@@ -46,42 +151,7 @@
                 if (meRes.ok) user = (await meRes.json()).user;
             } catch(e) {}
 
-            let html = `<div class="scan-header">IT 资产管理</div>
-            <div class="scan-card">
-                <div class="scan-tag">${catIcons[asset.category]||''} ${asset.asset_tag}</div>
-                <div class="scan-name">${asset.name}</div>
-                <div class="scan-status"><span class="badge ${statusClasses[asset.status]}">${statusLabels[asset.status]}</span></div>
-                <div class="scan-meta">
-                    ${asset.brand ? asset.brand + ' ' + (asset.model||'') + '<br>' : ''}
-                    分类：${catLabels[asset.category]||asset.category}<br>
-                    ${asset.holder_name ? '持有人：' + asset.holder_name + (asset.holder_dept ? ' ('+asset.holder_dept+')' : '') + '<br>' : ''}
-                    位置：${asset.location || '-'}
-                </div>
-            </div>`;
-
-            if (!user) {
-                html += `<div class="scan-card login-prompt">
-                    <p class="text-muted" style="margin-bottom:12px;">登录后可查看更多信息和操作</p>
-                    <a href="/login" class="btn btn-primary btn-block">登录</a>
-                </div>`;
-            } else if (user.role === 'admin') {
-                html += `<div class="scan-card">
-                    <p style="margin-bottom:12px;">管理员：${user.name}</p>
-                    <div class="scan-actions">
-                        <a href="/assets/${assetId}" class="btn btn-primary">查看详情 / 操作</a>
-                    </div>
-                </div>`;
-            } else {
-                html += `<div class="scan-card">
-                    <p style="margin-bottom:12px;">${user.name}，你好</p>
-                    <div class="scan-actions">
-                        <a href="/my/assets" class="btn btn-secondary">我的资产</a>
-                        <a href="/my/applications/new" class="btn btn-primary">申请资产</a>
-                    </div>
-                </div>`;
-            }
-
-            el.innerHTML = html;
+            buildScanCard(asset, user);
         } catch(err) {
             el.innerHTML = '<div class="scan-card"><p>加载失败，请检查网络连接</p></div>';
         }
