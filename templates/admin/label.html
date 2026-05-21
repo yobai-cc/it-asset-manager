@@ -11,21 +11,48 @@
     .label-card {
         width: 60mm; height: 40mm;
         border: 1px solid #ccc;
-        padding: 3mm;
+        padding: 2mm 3mm;
         display: inline-flex;
-        flex-direction: column;
+        flex-direction: row;
         align-items: center;
-        justify-content: center;
         background: white;
-        margin: 5mm;
+        margin: 3mm;
         page-break-inside: avoid;
+        overflow: hidden;
     }
-    .label-asset-tag { font-size: 11pt; font-weight: bold; margin-bottom: 1mm; }
-    .label-name { font-size: 8pt; margin-bottom: 1mm; text-align: center; }
-    .label-qr { width: 22mm; height: 22mm; }
+    .label-left {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+    }
+    .label-logo {
+        height: 5mm;
+        margin-bottom: 1mm;
+        object-fit: contain;
+    }
+    .label-asset-tag {
+        font-size: 10pt;
+        font-weight: bold;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .label-field {
+        font-size: 6pt;
+        line-height: 1.3;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        color: #333;
+    }
+    .label-right {
+        flex-shrink: 0;
+        margin-left: 2mm;
+    }
+    .label-qr { width: 20mm; height: 20mm; }
     @media print {
         .no-print { display: none !important; }
-        body { background: white; padding: 0; }
+        body { background: white; padding: 0; margin: 0; }
         .label-card { border: 1px solid #000; margin: 0; }
     }
     </style>
@@ -38,12 +65,35 @@
     <div id="labelContent"></div>
     <script>
     const assetId = {{ asset_id }};
-    fetch(`/api/assets/${assetId}`).then(r => r.json()).then(data => {
+    Promise.all([
+        fetch(`/api/assets/${assetId}`).then(r => r.json()),
+        fetch('/api/settings/label').then(r => r.json()),
+        fetch('/api/settings/logo').then(r => r.json()),
+    ]).then(([data, settings, logoData]) => {
+        const fields = settings.fields || ['name'];
+        const logoUrl = logoData.logo || '';
+
+        let fieldsHtml = '';
+        fields.forEach(f => {
+            const val = f === 'holder' ? (data.holder_name || '') : (data[f] || '');
+            if (val) fieldsHtml += `<div class="label-field">${val}</div>`;
+        });
+
+        let logoHtml = '';
+        if (logoUrl) {
+            logoHtml = `<img src="${logoUrl}" class="label-logo" alt="Logo">`;
+        }
+
         document.getElementById('labelContent').innerHTML = `
             <div class="label-card">
-                <div class="label-asset-tag">${data.asset_tag}</div>
-                <div class="label-name">${data.name}</div>
-                <img src="/api/assets/${assetId}/qr" class="label-qr" alt="QR Code">
+                <div class="label-left">
+                    ${logoHtml}
+                    <div class="label-asset-tag">${data.asset_tag}</div>
+                    ${fieldsHtml}
+                </div>
+                <div class="label-right">
+                    <img src="/api/assets/${assetId}/qr" class="label-qr" alt="QR">
+                </div>
             </div>
         `;
     });

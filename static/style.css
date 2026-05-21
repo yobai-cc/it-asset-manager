@@ -467,3 +467,30 @@ select.input { appearance: auto; }
     .stat-card { padding: 12px; }
     .stat-num { font-size: 24px; }
 }
+
+/* 分类标签 */
+.cat-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+/* 扫码卡片（仅移动端） */
+.stat-scan {
+    display: none;
+    text-decoration: none;
+    cursor: pointer;
+    background: linear-gradient(135deg, #2563eb, #1d4ed8);
+    color: white;
+    transition: transform 0.1s;
+}
+.stat-scan:active { transform: scale(0.97); }
+.stat-scan .stat-num { color: white; font-size: 28px; }
+.stat-scan .stat-label { color: rgba(255,255,255,0.85); }
+
+/* 移动端显示扫码卡片 */
+@media (max-width: 768px) {
+    .mobile-only { display: block !important; }
+}

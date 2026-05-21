@@ -9,6 +9,7 @@ const assetId = {{ asset_id }};
 const statusLabels = {in_stock:'库存',assigned:'在用',maintenance:'维修中',scrapped:'已报废'};
 const statusClasses = {in_stock:'badge-instock',assigned:'badge-assigned',maintenance:'badge-maintenance',scrapped:'badge-scrapped'};
 const catLabels = {computer:'电脑',monitor:'显示器',phone:'手机',tablet:'平板',printer:'打印机',server:'服务器',network:'网络设备',firewall:'防火墙',switch:'交换机'};
+const catIcons = {computer:'\u{1F4BB}',monitor:'\u{1F5A5}',phone:'\u{1F4F1}',tablet:'\u{1F4CB}',printer:'\u{1F5A8}',server:'\u{1F5C4}',network:'\u{1F310}',firewall:'\u{1F6E1}',switch:'\u{1F500}'};
 const eventNames = {stock_in:'入库',assign:'分配',return:'归还',transfer:'转移',maintenance_start:'送修',maintenance_end:'维修完成',scrap:'报废',label_print:'打印标签'};
 
 async function loadDetail() {
@@ -36,7 +37,7 @@ async function loadDetail() {
         <span class="badge ${statusClasses[data.status]}">${statusLabels[data.status]}</span>
         <table class="detail-table">
             <tr><th>名称</th><td>${data.name}</td></tr>
-            <tr><th>类别</th><td>${catLabels[data.category]||data.category}</td></tr>
+            <tr><th>类别</th><td>${catIcons[data.category]||''} ${catLabels[data.category]||data.category}</td></tr>
             <tr><th>品牌</th><td>${data.brand||'-'}</td></tr>
             <tr><th>型号</th><td>${data.model||'-'}</td></tr>
             <tr><th>序列号</th><td>${data.serial_number||'-'}</td></tr>

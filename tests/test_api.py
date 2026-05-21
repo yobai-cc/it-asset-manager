@@ -4,14 +4,83 @@
 """
 import os
 import sys
-import json
 import tempfile
+import subprocess
 import pytest
 
 # 确保项目目录在 path 中
 sys.path.insert(0, os.path.dirname(__file__))
 
 from models import Database
+
+
+LEGACY_MVP_SCHEMA = """
+CREATE TABLE "user" (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    employee_id     TEXT UNIQUE NOT NULL,
+    name            TEXT NOT NULL,
+    department      TEXT,
+    phone           TEXT,
+    email           TEXT,
+    role            TEXT NOT NULL DEFAULT 'employee',
+    password_hash   TEXT,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE asset (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_tag           TEXT UNIQUE NOT NULL,
+    name                TEXT NOT NULL,
+    category            TEXT NOT NULL,
+    brand               TEXT,
+    model               TEXT,
+    serial_number       TEXT UNIQUE,
+    status              TEXT NOT NULL DEFAULT 'in_stock',
+    current_holder_id   INTEGER REFERENCES user(id),
+    location            TEXT,
+    purchase_date       DATE,
+    purchase_price      REAL,
+    notes               TEXT,
+    created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE lifecycle_event (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id        INTEGER NOT NULL REFERENCES asset(id),
+    event_type      TEXT NOT NULL,
+    operator_id     INTEGER NOT NULL REFERENCES user(id),
+    target_user_id  INTEGER REFERENCES user(id),
+    from_location   TEXT,
+    to_location     TEXT,
+    notes           TEXT,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE maintenance_record (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id        INTEGER NOT NULL REFERENCES asset(id),
+    reported_by     INTEGER NOT NULL REFERENCES user(id),
+    description     TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'pending',
+    cost            REAL,
+    repair_notes    TEXT,
+    resolved_at     DATETIME,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE asset_application (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    applicant_id    INTEGER NOT NULL REFERENCES user(id),
+    asset_category  TEXT,
+    reason          TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'pending',
+    admin_id        INTEGER REFERENCES user(id),
+    admin_notes     TEXT,
+    approved_at     DATETIME,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+"""
 
 
 # ---- Fixtures ----
@@ -23,22 +92,59 @@ def db():
     os.close(fd)
     database = Database(path)
     database.init_db()
+    database.upgrade_db()
     yield database
     os.unlink(path)
 
 
 @pytest.fixture
-def app_client(db, monkeypatch):
-    """Flask 测试客户端"""
-    os.environ["DB_PATH"] = db.db_path
-    monkeypatch.setenv("DB_PATH", db.db_path)
+def legacy_mvp_db():
+    """旧 MVP 数据库：缺少 warranty_date、activity_log、app_config，密码为明文。"""
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    database = Database(path)
+    with database.get_conn() as conn:
+        conn.executescript(LEGACY_MVP_SCHEMA)
+        conn.execute(
+            """INSERT INTO "user" (employee_id, name, department, phone, email, role, password_hash)
+               VALUES ('admin', '管理员', 'IT部', '', 'admin@company.com', 'admin', 'admin123')"""
+        )
+        conn.execute(
+            """INSERT INTO "user" (employee_id, name, department, phone, email, role, password_hash)
+               VALUES ('emp001', '张三', '研发部', '13800000001', 'zhangsan@company.com', 'employee', 'emp001')"""
+        )
+        conn.execute(
+            """INSERT INTO asset (asset_tag, name, category, brand, model, serial_number,
+               status, current_holder_id, location, purchase_date, purchase_price, notes)
+               VALUES ('PC-2026-0001', 'Legacy PC', 'computer', 'Lenovo', 'T14s',
+               'LEGACY-SN-001', 'assigned', 2, '工位A-101', '2026-01-15', 6999.0, '旧库资产')"""
+        )
+        conn.execute(
+            """INSERT INTO lifecycle_event (asset_id, event_type, operator_id, target_user_id,
+               from_location, to_location, notes)
+               VALUES (1, 'assign', 1, 2, '仓库', '工位A-101', '旧库分配记录')"""
+        )
+    yield database
+    os.unlink(path)
+
+
+def configure_test_server(database, monkeypatch):
+    os.environ["DB_PATH"] = database.db_path
+    monkeypatch.setenv("DB_PATH", database.db_path)
 
     import importlib
     import server as srv
     importlib.reload(srv)
-    srv.DB_PATH = db.db_path
+    srv.DB_PATH = database.db_path
     srv.app.config["TESTING"] = True
     srv.app.config["SECRET_KEY"] = "test-secret"
+    return srv
+
+
+@pytest.fixture
+def app_client(db, monkeypatch):
+    """Flask 测试客户端"""
+    srv = configure_test_server(db, monkeypatch)
 
     with srv.app.test_client() as client:
         yield client
@@ -85,6 +191,24 @@ class TestModels:
         assert "lifecycle_event" in tables
         assert "maintenance_record" in tables
         assert "asset_application" in tables
+
+    def test_init_db_schema_is_complete_without_upgrade(self):
+        """全新安装只执行 init_db() 就应得到当前完整结构。"""
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        try:
+            database = Database(path)
+            database.init_db()
+            with database.get_conn() as conn:
+                asset_cols = [r[1] for r in conn.execute("PRAGMA table_info(asset)").fetchall()]
+                tables = [r[0] for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+                ).fetchall()]
+            assert "warranty_date" in asset_cols
+            assert "activity_log" in tables
+            assert "app_config" in tables
+        finally:
+            os.unlink(path)
 
     def test_generate_asset_tag_first(self, db):
         """第一个资产标签应从 0001 开始"""
@@ -524,6 +648,17 @@ class TestLabelAndQR:
         assert res.status_code == 200
         assert b"label-card" in res.data or b"asset" in res.data.lower()
 
+    def test_label_page_requires_admin(self, app_client, db):
+        """标签打印页是管理员页面，员工不能访问"""
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={"name": "PC", "category": "computer"})
+        aid = res.get_json()["id"]
+        login_employee(app_client)
+        res = app_client.get(f"/assets/{aid}/label")
+        assert res.status_code == 302
+        assert "/login" in res.headers["Location"]
+
     def test_batch_labels(self, app_client, db):
         """批量打印标签"""
         seed_test_data(db)
@@ -535,11 +670,160 @@ class TestLabelAndQR:
         assert res.status_code == 200
         assert len(res.get_json()["assets"]) == 2
 
+    def test_batch_labels_rejects_missing_assets(self, app_client, db):
+        """批量打印标签时任一资产不存在应返回 400，避免静默漏打"""
+        seed_test_data(db)
+        login_admin(app_client)
+        r1 = app_client.post("/api/assets", json={"name": "PC1", "category": "computer"})
+        id1 = r1.get_json()["id"]
+        res = app_client.post("/api/batch-labels", json={"asset_ids": [id1, 9999]})
+        assert res.status_code == 400
+        assert "不存在" in res.get_json()["error"]
+
     def test_qr_nonexistent_asset(self, app_client, db):
         seed_test_data(db)
         login_admin(app_client)
         res = app_client.get("/api/assets/9999/qr")
         assert res.status_code == 404
+
+
+# ---- 新增增强功能回归测试 ----
+
+class TestEnhancementRegressions:
+    def test_upgrade_db_migrates_legacy_mvp_schema(self, legacy_mvp_db, monkeypatch):
+        """旧 MVP schema 应能补齐结构、保留数据、迁移密码，且迁移后登录可用。"""
+        with legacy_mvp_db.get_conn() as conn:
+            old_asset_cols = [r[1] for r in conn.execute("PRAGMA table_info(asset)").fetchall()]
+            old_tables = [r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()]
+            assert "warranty_date" not in old_asset_cols
+            assert "activity_log" not in old_tables
+            assert "app_config" not in old_tables
+
+        legacy_mvp_db.upgrade_db()
+        with legacy_mvp_db.get_conn() as conn:
+            asset_cols = [r[1] for r in conn.execute("PRAGMA table_info(asset)").fetchall()]
+            tables = [r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()]
+            user = conn.execute(
+                'SELECT * FROM "user" WHERE employee_id = ?', ("admin",)
+            ).fetchone()
+            asset = conn.execute(
+                "SELECT * FROM asset WHERE asset_tag = ?", ("PC-2026-0001",)
+            ).fetchone()
+            assert "warranty_date" in asset_cols
+            assert "activity_log" in tables
+            assert "app_config" in tables
+            assert conn.execute("SELECT COUNT(*) FROM lifecycle_event").fetchone()[0] == 1
+            assert user["password_hash"] != "admin123"
+            assert "$" in user["password_hash"]
+            assert asset["name"] == "Legacy PC"
+            assert asset["warranty_date"] is None
+
+        legacy_mvp_db.upgrade_db()
+        with legacy_mvp_db.get_conn() as conn:
+            assert [r[1] for r in conn.execute("PRAGMA table_info(asset)").fetchall()].count("warranty_date") == 1
+            assert conn.execute("SELECT COUNT(*) FROM asset").fetchone()[0] == 1
+            migrated_hash = conn.execute(
+                'SELECT password_hash FROM "user" WHERE employee_id = ?', ("admin",)
+            ).fetchone()["password_hash"]
+
+        legacy_mvp_db.upgrade_db()
+        with legacy_mvp_db.get_conn() as conn:
+            assert conn.execute(
+                'SELECT password_hash FROM "user" WHERE employee_id = ?', ("admin",)
+            ).fetchone()["password_hash"] == migrated_hash
+
+        srv = configure_test_server(legacy_mvp_db, monkeypatch)
+        with srv.app.test_client() as client:
+            res = client.post("/api/login", json={"employee_id": "admin", "password": "admin123"})
+            assert res.status_code == 200
+            assert res.get_json()["user"]["role"] == "admin"
+            assert client.get("/api/me").status_code == 200
+
+    def test_init_db_script_initializes_fresh_database_with_seed_data(self):
+        """init_db.py 新装初始化应包含增强字段/表，不因种子数据写新字段失败"""
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        os.unlink(path)
+        try:
+            res = subprocess.run(
+                [sys.executable, "init_db.py", path],
+                cwd=os.path.dirname(os.path.dirname(__file__)),
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            assert res.returncode == 0, res.stderr
+            database = Database(path)
+            with database.get_conn() as conn:
+                cols = [r[1] for r in conn.execute("PRAGMA table_info(asset)").fetchall()]
+                assert "warranty_date" in cols
+                assert conn.execute("SELECT COUNT(*) FROM activity_log").fetchone()[0] >= 0
+                assert conn.execute("SELECT COUNT(*) FROM asset").fetchone()[0] == 10
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
+
+    def test_upgrade_db_is_idempotent_and_plaintext_passwords_migrate_once(self, db):
+        """upgrade_db 可重复执行，明文密码迁移后仍可登录且不会二次哈希"""
+        seed_test_data(db)
+        db.upgrade_db()
+        with db.get_conn() as conn:
+            first_hash = conn.execute(
+                'SELECT password_hash FROM "user" WHERE employee_id = ?', ("admin",)
+            ).fetchone()["password_hash"]
+        assert first_hash != "admin123"
+        assert "$" in first_hash
+
+        db.upgrade_db()
+        with db.get_conn() as conn:
+            second_hash = conn.execute(
+                'SELECT password_hash FROM "user" WHERE employee_id = ?', ("admin",)
+            ).fetchone()["password_hash"]
+        assert second_hash == first_hash
+
+    def test_label_settings_get_uses_default_when_stored_json_is_invalid(self, app_client, db):
+        seed_test_data(db)
+        db.set_config("label_fields", "not json")
+        res = app_client.get("/api/settings/label")
+        assert res.status_code == 200
+        assert res.get_json()["fields"] == ["name"]
+
+    def test_asset_and_activity_pagination_rejects_non_numeric_values(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        assert app_client.get("/api/assets?page=abc").status_code == 400
+        assert app_client.get("/api/activity?limit=abc").status_code == 400
+
+    def test_settings_updates_write_config_and_activity_in_same_transaction(self, app_client, db, monkeypatch):
+        """设置写入与 activity_log 应同事务；日志失败时配置不应被提前提交"""
+        import server as srv
+
+        seed_test_data(db)
+        login_admin(app_client)
+
+        def fail_log_activity(*args, **kwargs):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(srv, "log_activity", fail_log_activity)
+        with pytest.raises(RuntimeError):
+            app_client.put("/api/settings/qr-base-url", json={"url": "http://example.test"})
+
+        assert db.get_config("qr_base_url") is None
+
+    def test_assets_export_content_type_has_single_charset(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        app_client.post("/api/assets", json={"name": "PC", "category": "computer", "warranty_date": "2027-01-01"})
+        res = app_client.get("/api/assets/export")
+        assert res.status_code == 200
+        content_type = res.headers["Content-Type"].lower()
+        assert content_type.count("charset") == 1
+        assert res.data.startswith("\ufeff".encode("utf-8"))
+        assert b"warranty_date" in res.data
 
 
 # ---- 统计 API 测试 ----

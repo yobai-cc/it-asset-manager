@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block title %}系统设置 - IT 资产管理{% endblock %}
+{% block content %}
+<h2>系统设置</h2>
+
+<div class="form-card" style="margin-bottom:24px;">
+    <h3>企业 Logo</h3>
+    <p class="text-muted" style="margin-bottom:16px;">上传企业 Logo，将显示在所有资产标签上（建议使用透明背景 PNG，高度 40px 以内）：</p>
+    <div style="display:flex;align-items:center;gap:16px;margin-bottom:16px;">
+        <div id="logoPreview" style="width:120px;height:50px;border:1px solid var(--border);border-radius:4px;display:flex;align-items:center;justify-content:center;background:white;">
+            <span class="text-muted" id="logoEmptyHint">暂无 Logo</span>
+        </div>
+        <div>
+            <input type="file" id="logoFile" accept=".png,.jpg,.jpeg,.gif,.svg,.bmp" style="display:none" onchange="uploadLogo()">
+            <button class="btn btn-primary btn-sm" onclick="document.getElementById('logoFile').click()">上传 Logo</button>
+            <button class="btn btn-danger btn-sm" id="deleteLogoBtn" onclick="deleteLogo()" style="display:none;margin-left:8px;">删除</button>
+        </div>
+    </div>
+</div>
+
+<div class="form-card" style="margin-bottom:24px;">
+    <h3>标签打印字段</h3>
+    <p class="text-muted" style="margin-bottom:16px;">选择标签上需要显示的字段（标签号和二维码为固定项）：</p>
+    <div id="fieldCheckboxes">
+        <label style="display:block;margin-bottom:8px;"><input type="checkbox" value="name"> 名称</label>
+        <label style="display:block;margin-bottom:8px;"><input type="checkbox" value="serial_number"> 序列号</label>
+        <label style="display:block;margin-bottom:8px;"><input type="checkbox" value="holder"> 持有人</label>
+        <label style="display:block;margin-bottom:8px;"><input type="checkbox" value="location"> 位置</label>
+        <label style="display:block;margin-bottom:8px;"><input type="checkbox" value="brand"> 品牌</label>
+        <label style="display:block;margin-bottom:8px;"><input type="checkbox" value="model"> 型号</label>
+    </div>
+    <button class="btn btn-primary" onclick="saveLabelFields()" style="margin-top:12px;">保存标签配置</button>
+    <span id="labelSaveHint" style="color:var(--success);margin-left:8px;display:none;">已保存</span>
+
+    <h4 style="margin-top:24px;margin-bottom:8px;">标签预览（60mm × 40mm）</h4>
+    <div id="labelPreview" style="border:1px dashed #999;padding:4px;display:inline-block;background:#f9f9f9;"></div>
+</div>
+
+<div class="form-card">
+    <h3>二维码基础地址</h3>
+    <p class="text-muted" style="margin-bottom:16px;">用于生成标签二维码链接和 CSV 导出中的 QR URL：</p>
+    <div class="form-group">
+        <input type="text" id="qrBaseUrl" class="input" placeholder="http://10.18.0.68:9090">
+    </div>
+    <button class="btn btn-primary" onclick="saveQrBaseUrl()">保存地址</button>
+    <span id="qrSaveHint" style="color:var(--success);margin-left:8px;display:none;">已保存</span>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const previewStyle = `
+.label-preview-card {
+    width: 60mm; height: 40mm;
+    border: 1px solid #333; padding: 2mm 3mm;
+    display: flex; flex-direction: row; align-items: center;
+    background: white; overflow: hidden; font-family: sans-serif;
+}
+.lp-left { flex: 1; min-width: 0; overflow: hidden; }
+.lp-logo { height: 5mm; margin-bottom: 1mm; object-fit: contain; }
+.lp-tag { font-size: 10pt; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lp-field { font-size: 6pt; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #333; }
+.lp-right { flex-shrink: 0; margin-left: 2mm; }
+.lp-qr { width: 20mm; height: 20mm; background: #eee; display: flex; align-items: center; justify-content: center; font-size: 6pt; color: #999; }
+`;
+
+let currentLogo = '';
+
+async function loadAll() {
+    const [labelRes, qrRes, logoRes] = await Promise.all([
+        apiFetch('/api/settings/label'),
+        apiFetch('/api/settings/qr-base-url'),
+        apiFetch('/api/settings/logo'),
+    ]);
+    const checkboxes = document.querySelectorAll('#fieldCheckboxes input[type="checkbox"]');
+    checkboxes.forEach(cb => { cb.checked = labelRes.fields.includes(cb.value); });
+    document.getElementById('qrBaseUrl').value = qrRes.qr_base_url;
+    currentLogo = logoRes.logo || '';
+    renderLogoPreview();
+    renderLabelPreview(labelRes.fields);
+}
+
+function renderLogoPreview() {
+    const el = document.getElementById('logoPreview');
+    const delBtn = document.getElementById('deleteLogoBtn');
+    if (currentLogo) {
+        el.innerHTML = `<img src="${currentLogo}" style="max-width:110px;max-height:44px;object-fit:contain;">`;
+        delBtn.style.display = 'inline-block';
+    } else {
+        el.innerHTML = '<span class="text-muted">暂无 Logo</span>';
+        delBtn.style.display = 'none';
+    }
+}
+
+function renderLabelPreview(fields) {
+    fields = fields || ['name'];
+    const el = document.getElementById('labelPreview');
+    let logoHtml = currentLogo ? `<img src="${currentLogo}" class="lp-logo">` : '';
+    let fieldsHtml = '';
+    fields.forEach(f => {
+        const labels = {name:'ThinkPad T14s',serial_number:'SN-LNV-001',holder:'张三',location:'工位A-101',brand:'Lenovo',model:'T14s Gen 4'};
+        if (labels[f]) fieldsHtml += `<div class="lp-field">${labels[f]}</div>`;
+    });
+    el.innerHTML = `<style>${previewStyle}</style>
+    <div class="label-preview-card">
+        <div class="lp-left">
+            ${logoHtml}
+            <div class="lp-tag">PC-2026-0001</div>
+            ${fieldsHtml}
+        </div>
+        <div class="lp-right">
+            <div class="lp-qr">QR</div>
+        </div>
+    </div>`;
+}
+
+async function uploadLogo() {
+    const file = document.getElementById('logoFile').files[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await fetch('/api/settings/logo', {method: 'POST', body: fd});
+    const data = await res.json();
+    if (!res.ok) { alert(data.error || '上传失败'); return; }
+    currentLogo = data.logo;
+    renderLogoPreview();
+    const fields = [...document.querySelectorAll('#fieldCheckboxes input:checked')].map(cb => cb.value);
+    renderLabelPreview(fields);
+}
+
+async function deleteLogo() {
+    await apiFetch('/api/settings/logo', {method: 'DELETE'});
+    currentLogo = '';
+    renderLogoPreview();
+    const fields = [...document.querySelectorAll('#fieldCheckboxes input:checked')].map(cb => cb.value);
+    renderLabelPreview(fields);
+}
+
+async function saveLabelFields() {
+    const fields = [...document.querySelectorAll('#fieldCheckboxes input:checked')].map(cb => cb.value);
+    await apiFetch('/api/settings/label', {method: 'PUT', body: JSON.stringify({fields})});
+    renderLabelPreview(fields);
+    const hint = document.getElementById('labelSaveHint');
+    hint.style.display = 'inline';
+    setTimeout(() => hint.style.display = 'none', 2000);
+}
+
+async function saveQrBaseUrl() {
+    const url = document.getElementById('qrBaseUrl').value.trim();
+    if (!url) { alert('地址不能为空'); return; }
+    await apiFetch('/api/settings/qr-base-url', {method: 'PUT', body: JSON.stringify({url})});
+    const hint = document.getElementById('qrSaveHint');
+    hint.style.display = 'inline';
+    setTimeout(() => hint.style.display = 'none', 2000);
+}
+
+// 字段勾选变化时实时更新预览
+document.querySelectorAll('#fieldCheckboxes input').forEach(cb => {
+    cb.addEventListener('change', () => {
+        const fields = [...document.querySelectorAll('#fieldCheckboxes input:checked')].map(cb => cb.value);
+        renderLabelPreview(fields);
+    });
+});
+
+loadAll();
+</script>
+{% endblock %}

@@ -51,6 +51,12 @@
             <input type="number" step="0.01" id="purchase_price" class="input">
         </div>
     </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="warranty_date">保修到期日</label>
+                    <input type="date" id="warranty_date" class="input">
+                </div>
+            </div>
     <div class="form-group">
         <label for="notes">备注</label>
         <textarea id="notes" class="input" rows="3"></textarea>
@@ -72,6 +78,7 @@ if (assetId) {
         document.getElementById('location').value = data.location || '';
         document.getElementById('purchase_date').value = data.purchase_date || '';
         document.getElementById('purchase_price').value = data.purchase_price || '';
+        document.getElementById('warranty_date').value = data.warranty_date || '';
         document.getElementById('notes').value = data.notes || '';
     });
 }
@@ -87,6 +94,7 @@ document.getElementById('assetForm').addEventListener('submit', async (e) => {
         location: document.getElementById('location').value,
         purchase_date: document.getElementById('purchase_date').value,
         purchase_price: document.getElementById('purchase_price').value || null,
+        warranty_date: document.getElementById('warranty_date').value || null,
         notes: document.getElementById('notes').value,
     };
     if (assetId) {

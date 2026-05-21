@@ -1,7 +1,14 @@
 """IT 资产管理 MVP — Flask 应用"""
+import csv
+import io
+import json
 import os
-from flask import Flask, g, jsonify, request, render_template, redirect, url_for, session
-from models import Database
+from flask import Flask, g, jsonify, request, render_template, redirect, url_for, session, Response
+from werkzeug.security import check_password_hash
+from models import (
+    Database, VALID_CATEGORIES, STATE_TRANSITIONS,
+    log_activity, get_categories_meta, LABEL_FIELDS_DEFAULT,
+)
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
@@ -18,6 +25,20 @@ def get_db():
 @app.teardown_appcontext
 def close_db(exc):
     pass  # Database uses per-request connections
+
+
+def _parse_positive_int_arg(name, default, max_value=None):
+    """解析分页参数，非数字或小于 1 时返回 400 响应。"""
+    raw = request.args.get(name, default)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None, (jsonify({"error": f"{name} 必须是正整数"}), 400)
+    if value < 1:
+        return None, (jsonify({"error": f"{name} 必须是正整数"}), 400)
+    if max_value is not None:
+        value = min(value, max_value)
+    return value, None
 
 
 # ---- 认证辅助 ----
@@ -98,7 +119,7 @@ def asset_edit_page(asset_id):
 
 @app.route("/assets/<int:asset_id>/label")
 def asset_label_page(asset_id):
-    user = current_user()
+    user = require_role("admin")
     if not user:
         return redirect(url_for("login_page"))
     return render_template("admin/label.html", user=user, asset_id=asset_id)
@@ -169,11 +190,16 @@ def api_login():
         if not row:
             return jsonify({"error": "用户不存在"}), 401
         user = dict(row)
-        # MVP: 简单密码验证 (password_hash 存明文)
-        if user["password_hash"] and user["password_hash"] != password:
-            return jsonify({"error": "密码错误"}), 401
+        # 兼容哈希密码和明文密码（迁移期间）
+        if user["password_hash"]:
+            if "$" in user["password_hash"]:
+                if not check_password_hash(user["password_hash"], password):
+                    return jsonify({"error": "密码错误"}), 401
+            elif user["password_hash"] != password:
+                return jsonify({"error": "密码错误"}), 401
         session["user_id"] = user["id"]
         session["role"] = user["role"]
+        log_activity(conn, user["id"], "login", "user", user["id"], f"用户 {employee_id} 登录")
         return jsonify({"user": _user_dict(user)})
 
 
@@ -213,6 +239,18 @@ def api_stats():
                ORDER BY le.created_at DESC LIMIT 10"""
         ):
             recent_events.append(dict(row))
+        warranty_expiring = [_asset_dict(r) for r in conn.execute(
+            """SELECT a.*, u.name as holder_name FROM asset a
+               LEFT JOIN "user" u ON a.current_holder_id = u.id
+               WHERE a.warranty_date IS NOT NULL AND a.status != 'scrapped'
+                 AND a.warranty_date <= date('now', '+30 days') AND a.warranty_date >= date('now')
+               ORDER BY a.warranty_date""").fetchall()]
+        warranty_expired = [_asset_dict(r) for r in conn.execute(
+            """SELECT a.*, u.name as holder_name FROM asset a
+               LEFT JOIN "user" u ON a.current_holder_id = u.id
+               WHERE a.warranty_date IS NOT NULL AND a.status != 'scrapped'
+                 AND a.warranty_date < date('now')
+               ORDER BY a.warranty_date""").fetchall()]
     return jsonify({
         "total": total,
         "in_stock": by_status.get("in_stock", 0),
@@ -221,7 +259,80 @@ def api_stats():
         "scrapped": by_status.get("scrapped", 0),
         "by_category": by_category,
         "recent_events": recent_events,
+        "warranty_expiring": warranty_expiring,
+        "warranty_expired": warranty_expired,
     })
+
+
+# ---- API: 批量导入 ----
+
+@app.route("/api/assets/import", methods=["POST"])
+def api_assets_import():
+    user = require_role("admin")
+    if not user:
+        return jsonify({"error": "权限不足"}), 403
+    if "file" not in request.files:
+        return jsonify({"error": "未上传文件"}), 400
+    f = request.files["file"]
+    if not f.filename:
+        return jsonify({"error": "文件名为空"}), 400
+
+    raw = f.read().decode("utf-8-sig")  # utf-8-sig 自动处理 BOM
+    reader = csv.DictReader(io.StringIO(raw))
+    if not reader.fieldnames:
+        return jsonify({"error": "CSV 文件为空"}), 400
+
+    required_cols = {"name", "category"}
+    missing = required_cols - set(reader.fieldnames)
+    if missing:
+        return jsonify({"error": f"缺少必填列: {', '.join(missing)}"}), 400
+
+    db = get_db()
+    success = 0
+    errors = []
+    with db.get_conn() as conn:
+        for i, row in enumerate(reader, start=2):
+            name = (row.get("name") or "").strip()
+            category = (row.get("category") or "").strip()
+            if not name or not category:
+                errors.append({"row": i, "error": "名称或分类为空"})
+                continue
+            if category not in VALID_CATEGORIES:
+                errors.append({"row": i, "error": f"无效分类: {category}"})
+                continue
+            try:
+                asset_tag = db.generate_asset_tag(conn, category)
+                conn.execute(
+                    """INSERT INTO asset (asset_tag, name, category, brand, model, serial_number,
+                       status, location, purchase_date, purchase_price, notes, warranty_date)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        asset_tag, name, category,
+                        (row.get("brand") or "").strip() or None,
+                        (row.get("model") or "").strip() or None,
+                        (row.get("serial_number") or "").strip() or None,
+                        (row.get("status") or "").strip() or "in_stock",
+                        (row.get("location") or "").strip() or None,
+                        (row.get("purchase_date") or "").strip() or None,
+                        row.get("purchase_price") or None,
+                        (row.get("notes") or "").strip() or None,
+                        (row.get("warranty_date") or "").strip() or None,
+                    ),
+                )
+                asset_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                conn.execute(
+                    """INSERT INTO lifecycle_event (asset_id, event_type, operator_id, notes)
+                       VALUES (?, 'stock_in', ?, ?)""",
+                    (asset_id, user["id"], "批量导入"),
+                )
+                success += 1
+            except Exception as e:
+                errors.append({"row": i, "error": str(e)})
+        if success > 0:
+            log_activity(conn, user["id"], "import_csv", "asset", None,
+                         f"导入 {success} 条资产，失败 {len(errors)} 条")
+
+    return jsonify({"success": success, "errors": errors, "total": success + len(errors)})
 
 
 # ---- API: 资产 CRUD ----
@@ -232,8 +343,12 @@ def api_assets_list():
     category = request.args.get("category")
     status = request.args.get("status")
     search = request.args.get("search")
-    page = int(request.args.get("page", 1))
-    limit = int(request.args.get("limit", 20))
+    page, error = _parse_positive_int_arg("page", 1)
+    if error:
+        return error
+    limit, error = _parse_positive_int_arg("limit", 20, max_value=200)
+    if error:
+        return error
     offset = (page - 1) * limit
 
     where_clauses = []
@@ -281,13 +396,13 @@ def api_assets_create():
         asset_tag = db.generate_asset_tag(conn, data["category"])
         cursor = conn.execute(
             """INSERT INTO asset (asset_tag, name, category, brand, model, serial_number,
-               status, location, purchase_date, purchase_price, notes)
-               VALUES (?, ?, ?, ?, ?, ?, 'in_stock', ?, ?, ?, ?)""",
+               status, location, purchase_date, purchase_price, notes, warranty_date)
+               VALUES (?, ?, ?, ?, ?, ?, 'in_stock', ?, ?, ?, ?, ?)""",
             (
                 asset_tag, data["name"], data["category"],
                 data.get("brand"), data.get("model"), data.get("serial_number"),
                 data.get("location"), data.get("purchase_date"), data.get("purchase_price"),
-                data.get("notes"),
+                data.get("notes"), data.get("warranty_date"),
             ),
         )
         asset_id = cursor.lastrowid
@@ -297,6 +412,7 @@ def api_assets_create():
                VALUES (?, 'stock_in', ?, ?)""",
             (asset_id, user["id"], data.get("notes")),
         )
+        log_activity(conn, user["id"], "create_asset", "asset", asset_id, f"创建资产 {asset_tag}")
         row = conn.execute("SELECT * FROM asset WHERE id = ?", (asset_id,)).fetchone()
     return jsonify(_asset_dict(row)), 201
 
@@ -345,7 +461,7 @@ def api_assets_update(asset_id):
         fields = []
         params = []
         for col in ["name", "brand", "model", "serial_number", "location",
-                     "purchase_date", "purchase_price", "notes", "category"]:
+                     "purchase_date", "purchase_price", "notes", "category", "warranty_date"]:
             if col in data:
                 fields.append(f"{col} = ?")
                 params.append(data[col])
@@ -353,6 +469,8 @@ def api_assets_update(asset_id):
             fields.append("updated_at = CURRENT_TIMESTAMP")
             conn.execute(f"UPDATE asset SET {', '.join(fields)} WHERE id = ?",
                          params + [asset_id])
+            log_activity(conn, user["id"], "update_asset", "asset", asset_id,
+                         f"更新字段: {', '.join(fields)}")
         row = conn.execute("SELECT * FROM asset WHERE id = ?", (asset_id,)).fetchone()
     return jsonify(_asset_dict(row))
 
@@ -369,6 +487,7 @@ def api_assets_delete(asset_id):
             return jsonify({"error": "资产不存在"}), 404
         if dict(row)["status"] != "in_stock":
             return jsonify({"error": "只能删除库存中的资产"}), 400
+        log_activity(conn, user["id"], "delete_asset", "asset", asset_id, f"删除资产 {dict(row)['asset_tag']}")
         conn.execute("DELETE FROM lifecycle_event WHERE asset_id = ?", (asset_id,))
         conn.execute("DELETE FROM maintenance_record WHERE asset_id = ?", (asset_id,))
         conn.execute("DELETE FROM asset WHERE id = ?", (asset_id,))
@@ -400,6 +519,7 @@ def api_assign(asset_id):
                VALUES (?, 'assign', ?, ?, ?)""",
             (asset_id, user["id"], target_user_id, data.get("notes")),
         )
+        log_activity(conn, user["id"], "assign", "asset", asset_id, f"分配给用户ID {target_user_id}")
         row = conn.execute("SELECT * FROM asset WHERE id = ?", (asset_id,)).fetchone()
     return jsonify(_asset_dict(row))
 
@@ -424,6 +544,7 @@ def api_return(asset_id):
                VALUES (?, 'return', ?, ?, ?)""",
             (asset_id, user["id"], asset["location"], data.get("notes")),
         )
+        log_activity(conn, user["id"], "return", "asset", asset_id, "归还资产")
         row = conn.execute("SELECT * FROM asset WHERE id = ?", (asset_id,)).fetchone()
     return jsonify(_asset_dict(row))
 
@@ -452,6 +573,7 @@ def api_transfer(asset_id):
                VALUES (?, 'transfer', ?, ?, ?)""",
             (asset_id, user["id"], target_user_id, data.get("notes")),
         )
+        log_activity(conn, user["id"], "transfer", "asset", asset_id, f"转移给用户ID {target_user_id}")
         row = conn.execute("SELECT * FROM asset WHERE id = ?", (asset_id,)).fetchone()
     return jsonify(_asset_dict(row))
 
@@ -484,6 +606,7 @@ def api_maintenance_start(asset_id):
             (asset_id, user["id"], data["description"]),
         )
         record_id = cursor.lastrowid
+        log_activity(conn, user["id"], "maintenance_start", "asset", asset_id, data.get("description"))
         row = conn.execute("SELECT * FROM asset WHERE id = ?", (asset_id,)).fetchone()
     result = _asset_dict(row)
     result["maintenance_record_id"] = record_id
@@ -528,6 +651,7 @@ def api_maintenance_resolve(asset_id, record_id):
                VALUES (?, 'maintenance_end', ?, ?)""",
             (asset_id, user["id"], data.get("repair_notes")),
         )
+        log_activity(conn, user["id"], "maintenance_end", "asset", asset_id, data.get("repair_notes"))
         row = conn.execute("SELECT * FROM asset WHERE id = ?", (asset_id,)).fetchone()
     return jsonify(_asset_dict(row))
 
@@ -552,6 +676,7 @@ def api_scrap(asset_id):
                VALUES (?, 'scrap', ?, ?)""",
             (asset_id, user["id"], data.get("notes")),
         )
+        log_activity(conn, user["id"], "scrap", "asset", asset_id, data.get("notes"))
         row = conn.execute("SELECT * FROM asset WHERE id = ?", (asset_id,)).fetchone()
     return jsonify(_asset_dict(row))
 
@@ -676,6 +801,7 @@ def api_applications_approve(app_id):
                admin_notes = ?, approved_at = CURRENT_TIMESTAMP WHERE id = ?""",
             (user["id"], data.get("admin_notes"), app_id),
         )
+        log_activity(conn, user["id"], "approve_application", "application", app_id, data.get("admin_notes"))
         row = conn.execute(
             """SELECT aa.*, u.name as applicant_name FROM asset_application aa
                JOIN "user" u ON aa.applicant_id = u.id WHERE aa.id = ?""",
@@ -702,6 +828,7 @@ def api_applications_reject(app_id):
                admin_notes = ?, approved_at = CURRENT_TIMESTAMP WHERE id = ?""",
             (user["id"], data.get("admin_notes"), app_id),
         )
+        log_activity(conn, user["id"], "reject_application", "application", app_id, data.get("admin_notes"))
         row = conn.execute(
             """SELECT aa.*, u.name as applicant_name FROM asset_application aa
                JOIN "user" u ON aa.applicant_id = u.id WHERE aa.id = ?""",
@@ -797,7 +924,8 @@ def api_asset_qr(asset_id):
         if not row:
             return jsonify({"error": "资产不存在"}), 404
     host = request.host_url.rstrip("/")
-    qr_url = f"{host}/assets/{asset_id}"
+    qr_base = get_db().get_config("qr_base_url", host)
+    qr_url = f"{qr_base}/scan/{asset_id}"
     qr = qrcode.QRCode(version=1, box_size=10, border=2)
     qr.add_data(qr_url)
     qr.make(fit=True)
@@ -818,13 +946,26 @@ def api_batch_labels():
     asset_ids = data.get("asset_ids", [])
     if not asset_ids:
         return jsonify({"error": "未选择资产"}), 400
+    if not isinstance(asset_ids, list):
+        return jsonify({"error": "asset_ids 必须是数组"}), 400
+    try:
+        asset_ids = [int(aid) for aid in asset_ids]
+    except (TypeError, ValueError):
+        return jsonify({"error": "asset_ids 必须是数字 ID 数组"}), 400
+    if len(set(asset_ids)) != len(asset_ids):
+        return jsonify({"error": "asset_ids 不能重复"}), 400
     db = get_db()
     with db.get_conn() as conn:
         placeholders = ",".join("?" * len(asset_ids))
         rows = conn.execute(
             f"SELECT * FROM asset WHERE id IN ({placeholders})", asset_ids
         ).fetchall()
-        assets = [_asset_dict(r) for r in rows]
+        found_ids = {row["id"] for row in rows}
+        missing_ids = [aid for aid in asset_ids if aid not in found_ids]
+        if missing_ids:
+            return jsonify({"error": f"资产不存在: {', '.join(map(str, missing_ids))}"}), 400
+        assets_by_id = {row["id"]: _asset_dict(row) for row in rows}
+        assets = [assets_by_id[aid] for aid in asset_ids]
         # 记录打印事件
         for aid in asset_ids:
             conn.execute(
@@ -832,6 +973,7 @@ def api_batch_labels():
                    VALUES (?, 'label_print', ?, '批量打印标签')""",
                 (aid, user["id"]),
             )
+            log_activity(conn, user["id"], "label_print", "asset", aid, "批量打印标签")
     return jsonify({"assets": assets})
 
 
@@ -863,10 +1005,288 @@ def _asset_dict(row):
     return d
 
 
-# 导入常量供路由使用
-from models import VALID_CATEGORIES, STATE_TRANSITIONS
+# ---- API: 分类元数据 ----
+
+@app.route("/api/categories")
+def api_categories():
+    return jsonify({"categories": get_categories_meta()})
+
+
+# ---- API: 标签配置 ----
+
+@app.route("/api/settings/label", methods=["GET"])
+def api_label_settings():
+    db = get_db()
+    raw = db.get_config("label_fields")
+    fields = LABEL_FIELDS_DEFAULT
+    if raw:
+        try:
+            loaded = json.loads(raw)
+            if isinstance(loaded, list):
+                from models import LABEL_FIELD_OPTIONS
+                fields = [f for f in loaded if f in LABEL_FIELD_OPTIONS] or LABEL_FIELDS_DEFAULT
+        except json.JSONDecodeError:
+            fields = LABEL_FIELDS_DEFAULT
+    return jsonify({"fields": fields})
+
+
+@app.route("/api/settings/label", methods=["PUT"])
+def api_label_settings_update():
+    user = require_role("admin")
+    if not user:
+        return jsonify({"error": "权限不足"}), 403
+    data = request.get_json() or {}
+    from models import LABEL_FIELD_OPTIONS
+    fields = data.get("fields", [])
+    if not isinstance(fields, list):
+        return jsonify({"error": "fields 必须是数组"}), 400
+    fields = [f for f in fields if f in LABEL_FIELD_OPTIONS]
+    db = get_db()
+    with db.get_conn() as conn:
+        db.set_config("label_fields", json.dumps(fields), conn=conn)
+        log_activity(conn, user["id"], "update_settings", "config", None, f"标签字段: {', '.join(fields)}")
+    return jsonify({"fields": fields})
+
+
+# ---- API: QR 基础地址 ----
+
+@app.route("/api/settings/qr-base-url", methods=["GET"])
+def api_qr_base_url():
+    db = get_db()
+    url = db.get_config("qr_base_url", request.host_url.rstrip("/"))
+    return jsonify({"qr_base_url": url})
+
+
+@app.route("/api/settings/qr-base-url", methods=["PUT"])
+def api_qr_base_url_update():
+    user = require_role("admin")
+    if not user:
+        return jsonify({"error": "权限不足"}), 403
+    data = request.get_json() or {}
+    url = data.get("url", "").rstrip("/")
+    if not url:
+        return jsonify({"error": "URL 不能为空"}), 400
+    db = get_db()
+    with db.get_conn() as conn:
+        db.set_config("qr_base_url", url, conn=conn)
+        log_activity(conn, user["id"], "update_settings", "config", None, f"QR 地址: {url}")
+    return jsonify({"qr_base_url": url})
+
+
+# ---- API: Logo 上传 ----
+
+@app.route("/api/settings/logo", methods=["GET"])
+def api_logo():
+    db = get_db()
+    logo = db.get_config("company_logo", "")
+    return jsonify({"logo": logo})
+
+
+@app.route("/api/settings/logo", methods=["POST"])
+def api_logo_upload():
+    user = require_role("admin")
+    if not user:
+        return jsonify({"error": "权限不足"}), 403
+    if "file" not in request.files:
+        return jsonify({"error": "未上传文件"}), 400
+    f = request.files["file"]
+    if not f.filename:
+        return jsonify({"error": "文件名为空"}), 400
+    allowed = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".bmp"}
+    import os as _os
+    ext = _os.path.splitext(f.filename)[1].lower()
+    if ext not in allowed:
+        return jsonify({"error": f"不支持的格式 {ext}，仅支持 {', '.join(allowed)}"}), 400
+    save_dir = _os.path.join(_os.path.dirname(_os.abspath(__file__)), "static", "uploads")
+    _os.makedirs(save_dir, exist_ok=True)
+    save_path = _os.path.join(save_dir, "company_logo" + ext)
+    f.save(save_path)
+    logo_url = f"/static/uploads/company_logo{ext}"
+    db = get_db()
+    with db.get_conn() as conn:
+        db.set_config("company_logo", logo_url, conn=conn)
+        log_activity(conn, user["id"], "update_settings", "config", None, "上传企业Logo")
+    return jsonify({"logo": logo_url})
+
+
+@app.route("/api/settings/logo", methods=["DELETE"])
+def api_logo_delete():
+    user = require_role("admin")
+    if not user:
+        return jsonify({"error": "权限不足"}), 403
+    db = get_db()
+    logo = db.get_config("company_logo", "")
+    if logo:
+        import os as _os
+        file_path = _os.path.join(
+            _os.path.dirname(_os.path.abspath(__file__)), logo.lstrip("/")
+        )
+        if _os.path.exists(file_path):
+            _os.unlink(file_path)
+    db.set_config("company_logo", "")
+    return jsonify({"ok": True})
+
+
+# ---- API: CSV 导出 ----
+
+@app.route("/api/assets/export")
+def api_assets_export():
+    user = require_role("admin")
+    if not user:
+        return jsonify({"error": "权限不足"}), 403
+    category = request.args.get("category")
+    status = request.args.get("status")
+    search = request.args.get("search")
+    asset_ids = request.args.get("ids")
+
+    where_clauses = []
+    params = []
+    if category:
+        where_clauses.append("a.category = ?")
+        params.append(category)
+    if status:
+        where_clauses.append("a.status = ?")
+        params.append(status)
+    if search:
+        where_clauses.append("(a.asset_tag LIKE ? OR a.name LIKE ? OR a.serial_number LIKE ? OR a.brand LIKE ?)")
+        params.extend([f"%{search}%"] * 4)
+    if asset_ids:
+        id_list = [int(x) for x in asset_ids.split(",") if x.strip().isdigit()]
+        if id_list:
+            placeholders = ",".join("?" * len(id_list))
+            where_clauses.append(f"a.id IN ({placeholders})")
+            params.extend(id_list)
+
+    where = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
+    db = get_db()
+    qr_base = db.get_config("qr_base_url", request.host_url.rstrip("/"))
+
+    with db.get_conn() as conn:
+        rows = conn.execute(
+            f"""SELECT a.*, u.name as holder_name, u.department as holder_dept
+                FROM asset a LEFT JOIN "user" u ON a.current_holder_id = u.id
+                {where} ORDER BY a.asset_tag""",
+            params,
+        ).fetchall()
+
+        log_activity(conn, user["id"], "export_csv", "asset", None,
+                     f"导出 {len(rows)} 条资产")
+
+    output = io.StringIO()
+    output.write('﻿')  # UTF-8 BOM，确保 Excel/BarTender 正确识别中文
+    writer = csv.writer(output)
+    writer.writerow([
+        "asset_tag", "name", "category", "brand", "model",
+        "serial_number", "status", "holder_name", "location",
+        "purchase_date", "purchase_price", "warranty_date", "qr_url",
+    ])
+    for row in rows:
+        a = dict(row)
+        writer.writerow([
+            a["asset_tag"], a["name"], a["category"], a["brand"], a["model"],
+            a["serial_number"], a["status"], a.get("holder_name", ""),
+            a["location"], a["purchase_date"], a["purchase_price"],
+            a.get("warranty_date", ""), f"{qr_base}/scan/{a['id']}",
+        ])
+
+    return Response(
+        output.getvalue().encode("utf-8"),
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=assets_export.csv"},
+    )
+
+
+# ---- API: 操作记录 ----
+
+@app.route("/api/activity")
+def api_activity():
+    user = require_role("admin")
+    if not user:
+        return jsonify({"error": "权限不足"}), 403
+    db = get_db()
+    action = request.args.get("action")
+    page, error = _parse_positive_int_arg("page", 1)
+    if error:
+        return error
+    limit, error = _parse_positive_int_arg("limit", 30, max_value=200)
+    if error:
+        return error
+    offset = (page - 1) * limit
+
+    where_clauses = []
+    params = []
+    if action:
+        where_clauses.append("al.action = ?")
+        params.append(action)
+
+    where = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
+    with db.get_conn() as conn:
+        total = conn.execute(
+            f"SELECT COUNT(*) as c FROM activity_log al{where}", params
+        ).fetchone()["c"]
+        rows = conn.execute(
+            f"""SELECT al.*, u.name as user_name
+                FROM activity_log al LEFT JOIN "user" u ON al.user_id = u.id
+                {where} ORDER BY al.created_at DESC LIMIT ? OFFSET ?""",
+            params + [limit, offset],
+        ).fetchall()
+    return jsonify({"total": total, "page": page, "logs": [dict(r) for r in rows]})
+
+
+# ---- API: 公开资产信息（扫码用）----
+
+@app.route("/api/public/asset/<int:asset_id>")
+def api_public_asset(asset_id):
+    db = get_db()
+    with db.get_conn() as conn:
+        row = conn.execute(
+            """SELECT a.asset_tag, a.name, a.category, a.status, a.location,
+                      a.brand, a.model, a.warranty_date,
+                      u.name as holder_name, u.department as holder_dept
+               FROM asset a LEFT JOIN "user" u ON a.current_holder_id = u.id
+               WHERE a.id = ?""",
+            (asset_id,),
+        ).fetchone()
+        if not row:
+            return jsonify({"error": "资产不存在"}), 404
+    return jsonify(dict(row))
+
+
+# ---- 页面路由：新功能 ----
+
+@app.route("/settings")
+def settings_page():
+    user = require_role("admin")
+    if not user:
+        return redirect(url_for("login_page"))
+    return render_template("admin/settings.html", user=user)
+
+
+@app.route("/activity")
+def activity_page():
+    user = require_role("admin")
+    if not user:
+        return redirect(url_for("login_page"))
+    return render_template("admin/activity.html", user=user)
+
+
+@app.route("/scan")
+def scan_camera_page():
+    user = current_user()
+    return render_template("scan_camera.html", user=user)
+
+
+@app.route("/scan/<int:asset_id>")
+def scan_page(asset_id):
+    return render_template("scan.html", asset_id=asset_id)
+
 
 if __name__ == "__main__":
+    db_existed = os.path.exists(DB_PATH)
     db = Database(DB_PATH)
     db.init_db()
+    if db_existed:
+        db.upgrade_db()
     app.run(debug=True, host="0.0.0.0", port=5000)

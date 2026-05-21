@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>资产查询</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <style>
+        body { background: var(--bg); }
+        .scan-container { max-width: 480px; margin: 0 auto; padding: 16px; }
+        .scan-card {
+            background: var(--card); border-radius: var(--radius);
+            padding: 20px; border: 1px solid var(--border); margin-bottom: 16px;
+        }
+        .scan-tag { font-size: 20px; font-weight: 700; color: var(--primary); }
+        .scan-name { font-size: 18px; font-weight: 600; margin-top: 4px; }
+        .scan-status { margin-top: 8px; }
+        .scan-meta { font-size: 14px; color: var(--text-muted); margin-top: 12px; line-height: 1.8; }
+        .scan-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+        .scan-actions .btn { text-align: center; padding: 12px; font-size: 16px; }
+        .login-prompt { text-align: center; padding: 24px; }
+        .scan-header { text-align: center; padding: 16px 0 8px; color: var(--text-muted); font-size: 13px; }
+    </style>
+</head>
+<body>
+    <div class="scan-container" id="scanContent">
+        <p style="text-align:center;padding:40px 0;color:var(--text-muted);">加载中...</p>
+    </div>
+    <script>
+    const assetId = {{ asset_id }};
+    const catIcons = {computer:'\u{1F4BB}',monitor:'\u{1F5A5}',phone:'\u{1F4F1}',tablet:'\u{1F4CB}',printer:'\u{1F5A8}',server:'\u{1F5C4}',network:'\u{1F310}',firewall:'\u{1F6E1}',switch:'\u{1F500}'};
+    const catLabels = {computer:'电脑',monitor:'显示器',phone:'手机',tablet:'平板',printer:'打印机',server:'服务器',network:'网络设备',firewall:'防火墙',switch:'交换机'};
+    const statusLabels = {in_stock:'库存',assigned:'在用',maintenance:'维修中',scrapped:'已报废'};
+    const statusClasses = {in_stock:'badge-instock',assigned:'badge-assigned',maintenance:'badge-maintenance',scrapped:'badge-scrapped'};
+
+    async function init() {
+        const el = document.getElementById('scanContent');
+        try {
+            const pubRes = await fetch(`/api/public/asset/${assetId}`);
+            if (!pubRes.ok) { el.innerHTML = '<div class="scan-card"><p>资产不存在或已被删除</p></div>'; return; }
+            const asset = await pubRes.json();
+
+            let user = null;
+            try {
+                const meRes = await fetch('/api/me');
+                if (meRes.ok) user = (await meRes.json()).user;
+            } catch(e) {}
+
+            let html = `<div class="scan-header">IT 资产管理</div>
+            <div class="scan-card">
+                <div class="scan-tag">${catIcons[asset.category]||''} ${asset.asset_tag}</div>
+                <div class="scan-name">${asset.name}</div>
+                <div class="scan-status"><span class="badge ${statusClasses[asset.status]}">${statusLabels[asset.status]}</span></div>
+                <div class="scan-meta">
+                    ${asset.brand ? asset.brand + ' ' + (asset.model||'') + '<br>' : ''}
+                    分类：${catLabels[asset.category]||asset.category}<br>
+                    ${asset.holder_name ? '持有人：' + asset.holder_name + (asset.holder_dept ? ' ('+asset.holder_dept+')' : '') + '<br>' : ''}
+                    位置：${asset.location || '-'}
+                </div>
+            </div>`;
+
+            if (!user) {
+                html += `<div class="scan-card login-prompt">
+                    <p class="text-muted" style="margin-bottom:12px;">登录后可查看更多信息和操作</p>
+                    <a href="/login" class="btn btn-primary btn-block">登录</a>
+                </div>`;
+            } else if (user.role === 'admin') {
+                html += `<div class="scan-card">
+                    <p style="margin-bottom:12px;">管理员：${user.name}</p>
+                    <div class="scan-actions">
+                        <a href="/assets/${assetId}" class="btn btn-primary">查看详情 / 操作</a>
+                    </div>
+                </div>`;
+            } else {
+                html += `<div class="scan-card">
+                    <p style="margin-bottom:12px;">${user.name}，你好</p>
+                    <div class="scan-actions">
+                        <a href="/my/assets" class="btn btn-secondary">我的资产</a>
+                        <a href="/my/applications/new" class="btn btn-primary">申请资产</a>
+                    </div>
+                </div>`;
+            }
+
+            el.innerHTML = html;
+        } catch(err) {
+            el.innerHTML = '<div class="scan-card"><p>加载失败，请检查网络连接</p></div>';
+        }
+    }
+
+    init();
+    </script>
+</body>
+</html>

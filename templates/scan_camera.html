@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}扫码查资产 - IT 资产管理{% endblock %}
+{% block content %}
+<h2>扫码查资产</h2>
+
+<div id="scanArea" style="max-width:400px;margin:0 auto;">
+    <div id="reader" style="width:100%;"></div>
+    <p id="scanStatus" style="text-align:center;margin-top:12px;color:var(--text-muted);">正在启动摄像头...</p>
+    <div id="scanError" style="display:none;text-align:center;margin-top:12px;">
+        <p style="color:var(--danger);margin-bottom:12px;" id="scanErrorMsg"></p>
+        <a href="/my/assets" class="btn btn-secondary">返回我的资产</a>
+    </div>
+</div>
+
+<div id="manualInput" style="max-width:400px;margin:24px auto 0;">
+    <div class="form-group">
+        <label>手动输入资产标签号</label>
+        <div style="display:flex;gap:8px;">
+            <input type="text" id="manualTag" class="input" placeholder="如 PC-2026-0001">
+            <button class="btn btn-primary" onclick="searchByTag()">查询</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script>
+function onScanSuccess(decodedText) {
+    // 从 QR URL 或纯文本中提取资产 ID
+    const match = decodedText.match(/\/scan\/(\d+)/) || decodedText.match(/\/assets\/(\d+)/);
+    if (match) {
+        location.href = '/scan/' + match[1];
+        return;
+    }
+    // 如果扫到的是资产标签号，尝试通过 API 查找
+    if (/^[A-Z]+-\d{4}-\d{4}$/.test(decodedText.trim())) {
+        lookupByTag(decodedText.trim());
+        return;
+    }
+    // 其他情况尝试直接跳转
+    if (decodedText.startsWith('http')) {
+        location.href = decodedText;
+    } else {
+        document.getElementById('scanStatus').textContent = '无法识别: ' + decodedText;
+    }
+}
+
+function onScanFailure() {
+    // 静默，持续扫描
+}
+
+function onScanStarted() {
+    document.getElementById('scanStatus').textContent = '请将二维码对准摄像头';
+}
+
+function onScanError(err) {
+    document.getElementById('scanArea').style.display = 'none';
+    document.getElementById('scanError').style.display = 'block';
+    document.getElementById('scanErrorMsg').textContent = '无法启动摄像头，请确认已授权摄像头权限，或使用下方手动输入';
+}
+
+const html5QrCode = new Html5Qrcode("reader");
+html5QrCode.start(
+    { facingMode: "environment" },
+    { fps: 10, qrbox: { width: 250, height: 250 } },
+    onScanSuccess,
+    onScanFailure
+).then(onScanStarted).catch(onScanError);
+
+async function lookupByTag(tag) {
+    try {
+        const res = await fetch('/api/assets?search=' + encodeURIComponent(tag) + '&limit=1');
+        const data = await res.json();
+        if (data.assets && data.assets.length > 0) {
+            location.href = '/scan/' + data.assets[0].id;
+        } else {
+            document.getElementById('scanStatus').textContent = '未找到资产: ' + tag;
+        }
+    } catch(e) {
+        document.getElementById('scanStatus').textContent = '查询失败';
+    }
+}
+
+async function searchByTag() {
+    const tag = document.getElementById('manualTag').value.trim();
+    if (!tag) return;
+    await lookupByTag(tag);
+}
+</script>
+{% endblock %}

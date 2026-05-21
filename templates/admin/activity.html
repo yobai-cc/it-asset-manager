@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}操作记录 - IT 资产管理{% endblock %}
+{% block content %}
+<h2>操作记录</h2>
+<div class="filter-bar">
+    <select id="actionFilter" class="input" onchange="loadActivity()">
+        <option value="">全部操作</option>
+        <option value="login">登录</option>
+        <option value="create_asset">创建资产</option>
+        <option value="update_asset">更新资产</option>
+        <option value="delete_asset">删除资产</option>
+        <option value="assign">分配</option>
+        <option value="return">归还</option>
+        <option value="transfer">转移</option>
+        <option value="maintenance_start">送修</option>
+        <option value="maintenance_end">维修完成</option>
+        <option value="scrap">报废</option>
+        <option value="label_print">打印标签</option>
+        <option value="export_csv">导出CSV</option>
+        <option value="approve_application">审批通过</option>
+        <option value="reject_application">审批驳回</option>
+        <option value="update_settings">修改配置</option>
+    </select>
+</div>
+<table class="table">
+    <thead><tr><th>时间</th><th>操作人</th><th>操作</th><th>对象</th><th>详情</th></tr></thead>
+    <tbody id="activityBody"></tbody>
+</table>
+<div class="pagination" id="pagination"></div>
+{% endblock %}
+{% block scripts %}
+<script>
+const actionNames = {
+    login:'登录', create_asset:'创建资产', update_asset:'更新资产', delete_asset:'删除资产',
+    assign:'分配', return:'归还', transfer:'转移',
+    maintenance_start:'送修', maintenance_end:'维修完成', scrap:'报废',
+    label_print:'打印标签', export_csv:'导出CSV',
+    approve_application:'审批通过', reject_application:'审批驳回', update_settings:'修改配置',
+};
+
+async function loadActivity(page = 1) {
+    const action = document.getElementById('actionFilter').value;
+    let url = `/api/activity?page=${page}&limit=30`;
+    if (action) url += `&action=${action}`;
+    const data = await apiFetch(url);
+    const tbody = document.getElementById('activityBody');
+    tbody.innerHTML = '';
+    data.logs.forEach(l => {
+        tbody.innerHTML += `<tr>
+            <td>${new Date(l.created_at).toLocaleString('zh-CN')}</td>
+            <td>${l.user_name||'-'}</td>
+            <td>${actionNames[l.action]||l.action}</td>
+            <td>${l.target_type||'-'}${l.target_id ? ' #'+l.target_id : ''}</td>
+            <td>${l.detail||'-'}</td>
+        </tr>`;
+    });
+    const pages = Math.ceil(data.total / 30);
+    const el = document.getElementById('pagination');
+    if (pages <= 1) { el.innerHTML = ''; return; }
+    let html = '';
+    if (page > 1) html += `<a class="page-btn" onclick="loadActivity(${page-1})">上一页</a>`;
+    for (let i = 1; i <= pages; i++) html += `<a class="page-btn ${i===page?'active':''}" onclick="loadActivity(${i})">${i}</a>`;
+    if (page < pages) html += `<a class="page-btn" onclick="loadActivity(${page+1})">下一页</a>`;
+    el.innerHTML = html;
+}
+
+loadActivity();
+</script>
+{% endblock %}

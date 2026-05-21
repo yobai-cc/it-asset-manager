@@ -1,7 +1,10 @@
 {% extends "base.html" %}
 {% block title %}资产列表 - IT 资产管理{% endblock %}
 {% block content %}
-<h2>资产列表 <a href="/assets/new" class="btn btn-primary btn-sm">新增资产</a></h2>
+<h2>资产列表
+    <a href="/assets/new" class="btn btn-primary btn-sm">新增资产</a>
+    <button class="btn btn-secondary btn-sm" onclick="showImportModal()">批量导入</button>
+</h2>
 <div class="filter-bar">
     <input type="text" id="searchInput" placeholder="搜索标签号/名称/序列号/品牌..." class="input">
     <select id="categoryFilter" class="input">
@@ -18,7 +21,27 @@
         <option value="maintenance">维修中</option><option value="scrapped">已报废</option>
     </select>
     <button class="btn btn-secondary" onclick="loadAssets()">搜索</button>
+    <button class="btn btn-primary" onclick="exportCSV()">导出CSV</button>
 </div>
+
+<!-- 批量导入对话框 -->
+<div id="importModal" class="modal" style="display:none;">
+    <div class="modal-content">
+        <h3>批量导入资产</h3>
+        <p class="text-muted" style="margin-bottom:12px;">上传 CSV 文件，格式与"导出CSV"一致。必填列：<code>name</code>、<code>category</code>。分类值必须为英文（computer, monitor, phone, tablet, printer, server, network, firewall, switch）。</p>
+        <div class="form-group">
+            <input type="file" id="importFile" accept=".csv" class="input">
+        </div>
+        <div style="display:flex;gap:8px;">
+            <button class="btn btn-primary" onclick="doImport()" id="importBtn">开始导入</button>
+            <button class="btn btn-secondary" onclick="document.getElementById('importModal').style.display='none'">取消</button>
+        </div>
+        <div id="importResult" style="margin-top:16px;display:none;">
+            <div id="importResultContent"></div>
+        </div>
+    </div>
+</div>
+
 <div class="batch-bar" id="batchBar" style="display:none;">
     <span id="selectedCount">0</span> 项已选
     <button class="btn btn-secondary btn-sm" onclick="batchPrintLabels()">批量打印标签</button>
@@ -37,6 +60,8 @@
 let currentPage = 1;
 const statusLabels = {in_stock:'库存',assigned:'在用',maintenance:'维修中',scrapped:'已报废'};
 const catLabels = {computer:'电脑',monitor:'显示器',phone:'手机',tablet:'平板',printer:'打印机',server:'服务器',network:'网络设备',firewall:'防火墙',switch:'交换机'};
+const catIcons = {computer:'\u{1F4BB}',monitor:'\u{1F5A5}',phone:'\u{1F4F1}',tablet:'\u{1F4CB}',printer:'\u{1F5A8}',server:'\u{1F5C4}',network:'\u{1F310}',firewall:'\u{1F6E1}',switch:'\u{1F500}'};
+const catColors = {computer:'#2563eb',monitor:'#7c3aed',phone:'#059669',tablet:'#d97706',printer:'#dc2626',server:'#475569',network:'#0891b2',firewall:'#be185d',switch:'#65a30d'};
 const statusClasses = {in_stock:'badge-instock',assigned:'badge-assigned',maintenance:'badge-maintenance',scrapped:'badge-scrapped'};
 
 async function loadAssets(page = 1) {
@@ -56,7 +81,7 @@ async function loadAssets(page = 1) {
             <td><input type="checkbox" class="asset-checkbox" value="${a.id}"></td>
             <td><a href="/assets/${a.id}">${a.asset_tag}</a></td>
             <td>${a.name}</td>
-            <td>${catLabels[a.category]||a.category}</td>
+            <td><span class="cat-badge" style="background:${catColors[a.category]||'#64748b'}15;color:${catColors[a.category]||'#64748b'}">${catIcons[a.category]||''} ${catLabels[a.category]||a.category}</span></td>
             <td><span class="badge ${statusClasses[a.status]}">${statusLabels[a.status]||a.status}</span></td>
             <td>${a.holder_name||'-'}</td>
             <td>${a.location||'-'}</td>
@@ -98,25 +123,87 @@ function updateBatchBar() {
 async function batchPrintLabels() {
     const ids = [...document.querySelectorAll('.asset-checkbox:checked')].map(c => parseInt(c.value));
     if (!ids.length) return;
-    const data = await apiFetch('/api/batch-labels', {
-        method: 'POST', body: JSON.stringify({ asset_ids: ids }),
-    });
-    // 打开新窗口显示批量标签
+    const [data, settings, logoData] = await Promise.all([
+        apiFetch('/api/batch-labels', { method: 'POST', body: JSON.stringify({ asset_ids: ids }) }),
+        apiFetch('/api/settings/label'),
+        apiFetch('/api/settings/logo'),
+    ]);
+    const fields = settings.fields || ['name'];
+    const logoUrl = logoData.logo || '';
     const w = window.open('', '_blank');
-    let html = '<html><head><meta charset="UTF-8"><link rel="stylesheet" href="/static/style.css"><title>批量标签</title></head><body class="label-page"><div class="labels-grid">';
+    const labelStyle = `*{margin:0;padding:0;box-sizing:border-box}body{background:#f5f5f5;font-family:sans-serif;padding:20px}.label-card{width:60mm;height:40mm;border:1px solid #ccc;padding:2mm 3mm;display:inline-flex;flex-direction:row;align-items:center;background:white;margin:3mm;page-break-inside:avoid;overflow:hidden}.label-left{flex:1;min-width:0;overflow:hidden}.label-logo{height:5mm;margin-bottom:1mm;object-fit:contain}.label-asset-tag{font-size:10pt;font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.label-field{font-size:6pt;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#333}.label-right{flex-shrink:0;margin-left:2mm}.label-qr{width:20mm;height:20mm}@media print{.no-print{display:none!important}body{background:white;padding:0;margin:0}.label-card{border:1px solid #000;margin:0}}`;
+    let html = `<html><head><meta charset="UTF-8"><style>${labelStyle}</style><title>批量标签</title></head><body><div class="no-print" style="margin-bottom:20px"><button onclick="window.print()" style="padding:10px 20px;font-size:16px;">打印标签</button></div>`;
     for (const a of data.assets) {
+        let fieldsHtml = '';
+        fields.forEach(f => {
+            const val = f === 'holder' ? (a.holder_name || '') : (a[f] || '');
+            if (val) fieldsHtml += `<div class="label-field">${val}</div>`;
+        });
+        let logoHtml = logoUrl ? `<img src="${logoUrl}" class="label-logo" alt="Logo">` : '';
         html += `<div class="label-card">
-            <div class="label-asset-tag">${a.asset_tag}</div>
-            <div class="label-name">${a.name}</div>
-            <img src="/api/assets/${a.id}/qr" class="label-qr" alt="QR">
+            <div class="label-left">
+                ${logoHtml}
+                <div class="label-asset-tag">${a.asset_tag}</div>
+                ${fieldsHtml}
+            </div>
+            <div class="label-right">
+                <img src="/api/assets/${a.id}/qr" class="label-qr" alt="QR">
+            </div>
         </div>`;
     }
-    html += '</div><button onclick="window.print()" class="btn btn-primary" style="margin:20px;">打印标签</button></body></html>';
+    html += '</body></html>';
     w.document.write(html);
     w.document.close();
 }
 
 document.getElementById('searchInput').addEventListener('keydown', e => { if (e.key === 'Enter') loadAssets(); });
 loadAssets();
+
+function showImportModal() {
+    document.getElementById('importFile').value = '';
+    document.getElementById('importResult').style.display = 'none';
+    document.getElementById('importBtn').disabled = false;
+    document.getElementById('importModal').style.display = 'flex';
+}
+
+async function doImport() {
+    const file = document.getElementById('importFile').files[0];
+    if (!file) { alert('请选择 CSV 文件'); return; }
+    document.getElementById('importBtn').disabled = true;
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+        const res = await fetch('/api/assets/import', {method: 'POST', body: fd});
+        const data = await res.json();
+        if (!res.ok) { alert(data.error || '导入失败'); document.getElementById('importBtn').disabled = false; return; }
+        const el = document.getElementById('importResult');
+        el.style.display = 'block';
+        let html = `<p style="color:var(--success);font-weight:600;margin-bottom:8px;">导入完成：成功 ${data.success} 条${data.errors.length > 0 ? '，失败 ' + data.errors.length + ' 条' : ''}</p>`;
+        if (data.errors.length > 0) {
+            html += '<table class="table" style="margin-top:8px;"><thead><tr><th>行号</th><th>错误</th></tr></thead><tbody>';
+            data.errors.forEach(e => { html += `<tr><td>第 ${e.row} 行</td><td>${e.error}</td></tr>`; });
+            html += '</tbody></table>';
+        }
+        document.getElementById('importResultContent').innerHTML = html;
+        loadAssets();
+    } catch(e) {
+        alert('上传失败: ' + e.message);
+        document.getElementById('importBtn').disabled = false;
+    }
+}
+
+function exportCSV() {
+    const search = document.getElementById('searchInput').value;
+    const category = document.getElementById('categoryFilter').value;
+    const status = document.getElementById('statusFilter').value;
+    const checked = [...document.querySelectorAll('.asset-checkbox:checked')];
+    let url = '/api/assets/export?';
+    const params = [];
+    if (search) params.push(`search=${encodeURIComponent(search)}`);
+    if (category) params.push(`category=${category}`);
+    if (status) params.push(`status=${status}`);
+    if (checked.length > 0) params.push(`ids=${checked.map(c => c.value).join(',')}`);
+    window.location.href = url + params.join('&');
+}
 </script>
 {% endblock %}

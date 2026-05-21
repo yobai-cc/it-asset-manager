@@ -2,12 +2,21 @@
 {% block title %}仪表盘 - IT 资产管理{% endblock %}
 {% block content %}
 <h2>仪表盘</h2>
+
 <div class="stats-grid" id="statsGrid">
     <div class="stat-card"><div class="stat-num" id="totalNum">-</div><div class="stat-label">总资产</div></div>
     <div class="stat-card stat-assigned"><div class="stat-num" id="assignedNum">-</div><div class="stat-label">在用</div></div>
     <div class="stat-card stat-instock"><div class="stat-num" id="instockNum">-</div><div class="stat-label">库存</div></div>
     <div class="stat-card stat-maintenance"><div class="stat-num" id="maintenanceNum">-</div><div class="stat-label">维修中</div></div>
     <div class="stat-card stat-scrapped"><div class="stat-num" id="scrappedNum">-</div><div class="stat-label">已报废</div></div>
+    <a href="/scan" class="stat-card stat-scan mobile-only">
+        <div class="stat-num">📷</div>
+        <div class="stat-label">扫码查资产</div>
+    </a>
+</div>
+<div class="dashboard-section" id="warrantySection" style="display:none;">
+    <h3>⚠️ 保修提醒</h3>
+    <div id="warrantyAlerts"></div>
 </div>
 <div class="dashboard-section">
     <h3>按分类统计</h3>
@@ -23,6 +32,9 @@
 {% endblock %}
 {% block scripts %}
 <script>
+const catIcons = {computer:'\u{1F4BB}',monitor:'\u{1F5A5}',phone:'\u{1F4F1}',tablet:'\u{1F4CB}',printer:'\u{1F5A8}',server:'\u{1F5C4}',network:'\u{1F310}',firewall:'\u{1F6E1}',switch:'\u{1F500}'};
+const catColors = {computer:'#2563eb',monitor:'#7c3aed',phone:'#059669',tablet:'#d97706',printer:'#dc2626',server:'#475569',network:'#0891b2',firewall:'#be185d',switch:'#65a30d'};
+
 (async () => {
     const data = await apiFetch('/api/stats');
     document.getElementById('totalNum').textContent = data.total;
@@ -31,14 +43,43 @@
     document.getElementById('maintenanceNum').textContent = data.maintenance;
     document.getElementById('scrappedNum').textContent = data.scrapped;
 
+    // 保修提醒
+    const hasExpiring = data.warranty_expiring && data.warranty_expiring.length > 0;
+    const hasExpired = data.warranty_expired && data.warranty_expired.length > 0;
+    if (hasExpiring || hasExpired) {
+        document.getElementById('warrantySection').style.display = 'block';
+        let html = '';
+        if (hasExpiring) {
+            html += '<p style="color:var(--warning);margin-bottom:8px;">即将到期（30天内）：</p>';
+            html += '<table class="table" style="margin-bottom:16px;"><thead><tr><th>标签号</th><th>名称</th><th>持有人</th><th>到期日</th></tr></thead><tbody>';
+            data.warranty_expiring.forEach(a => {
+                html += `<tr><td><a href="/assets/${a.id}">${a.asset_tag}</a></td><td>${a.name}</td><td>${a.holder_name||'-'}</td><td>${a.warranty_date}</td></tr>`;
+            });
+            html += '</tbody></table>';
+        }
+        if (hasExpired) {
+            html += '<p style="color:var(--danger);margin-bottom:8px;">已过保修期：</p>';
+            html += '<table class="table"><thead><tr><th>标签号</th><th>名称</th><th>持有人</th><th>到期日</th></tr></thead><tbody>';
+            data.warranty_expired.forEach(a => {
+                html += `<tr><td><a href="/assets/${a.id}">${a.asset_tag}</a></td><td>${a.name}</td><td>${a.holder_name||'-'}</td><td>${a.warranty_date}</td></tr>`;
+            });
+            html += '</tbody></table>';
+        }
+        document.getElementById('warrantyAlerts').innerHTML = html;
+    }
+
+    // 分类图表
     const catEl = document.getElementById('categoryChart');
     const catNames = {computer:'电脑',monitor:'显示器',phone:'手机',tablet:'平板',printer:'打印机',server:'服务器',network:'网络设备',firewall:'防火墙',switch:'交换机'};
     const maxVal = Math.max(...Object.values(data.by_category), 1);
     for (const [cat, count] of Object.entries(data.by_category)) {
         const pct = Math.round(count / maxVal * 100);
-        catEl.innerHTML += `<div class="cat-row"><span class="cat-name">${catNames[cat]||cat}</span><div class="cat-bar-bg"><div class="cat-bar" style="width:${pct}%"></div></div><span class="cat-count">${count}</span></div>`;
+        const color = catColors[cat] || '#2563eb';
+        const icon = catIcons[cat] || '';
+        catEl.innerHTML += `<div class="cat-row"><span class="cat-name">${icon} ${catNames[cat]||cat}</span><div class="cat-bar-bg"><div class="cat-bar" style="width:${pct}%;background:${color}"></div></div><span class="cat-count">${count}</span></div>`;
     }
 
+    // 最近事件
     const eventNames = {stock_in:'入库',assign:'分配',return:'归还',transfer:'转移',maintenance_start:'维修开始',maintenance_end:'维修完成',scrap:'报废',label_print:'打印标签'};
     const tbody = document.querySelector('#recentEvents tbody');
     data.recent_events.forEach(e => {

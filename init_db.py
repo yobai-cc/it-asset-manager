@@ -2,6 +2,7 @@
 import os
 import sys
 from models import Database
+from werkzeug.security import generate_password_hash
 
 DB_PATH = os.environ.get("DB_PATH", "it_asset.db")
 
@@ -10,7 +11,7 @@ def seed(db):
     """插入演示数据"""
     with db.get_conn() as conn:
         # 清空旧数据
-        for table in ["asset_application", "maintenance_record", "lifecycle_event", "asset", "user"]:
+        for table in ["activity_log", "app_config", "asset_application", "maintenance_record", "lifecycle_event", "asset", "user"]:
             conn.execute(f"DELETE FROM {table}")
         conn.executescript("DELETE FROM sqlite_sequence")
 
@@ -25,27 +26,27 @@ def seed(db):
             conn.execute(
                 """INSERT INTO "user" (employee_id, name, department, phone, email, role, password_hash)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                u,
+                (u[0], u[1], u[2], u[3], u[4], u[5], generate_password_hash(u[6])),
             )
 
-        # 资产
+        # 资产（含 warranty_date）
         assets = [
-            ("PC-2026-0001", "ThinkPad T14s Gen 4", "computer", "Lenovo", "T14s Gen 4", "SN-LNV-001", "assigned", 2, "工位A-101", "2026-01-15", 6999.00, "研发主力机"),
-            ("PC-2026-0002", "MacBook Pro 14", "computer", "Apple", "M3 Pro 14", "SN-APL-001", "assigned", 3, "工位B-205", "2026-02-01", 14999.00, "设计用"),
-            ("MON-2026-0001", "DELL U2723QE", "monitor", "DELL", "U2723QE", "SN-DL-001", "assigned", 2, "工位A-101", "2026-01-15", 3299.00, ""),
-            ("PH-2026-0001", "iPhone 15 Pro", "phone", "Apple", "A3101", "SN-IPH-001", "in_stock", None, "仓库", "2026-01-20", 8999.00, "备机"),
-            ("PRN-2026-0001", "HP LaserJet Pro", "printer", "HP", "M404dn", "SN-HP-001", "assigned", 1, "IT部办公区", "2025-11-10", 2499.00, "共享打印机"),
-            ("SRV-2026-0001", "Dell PowerEdge R740", "server", "Dell", "R740", "SN-DL-SRV-001", "assigned", 1, "机房A-01号柜", "2025-06-15", 45000.00, "主服务器"),
-            ("NET-2026-0001", "Cisco C9300", "network", "Cisco", "C9300-48T", "SN-CSC-001", "assigned", 1, "机房A-02号柜", "2025-06-15", 28000.00, "核心交换"),
-            ("PC-2026-0003", "HP EliteBook 840", "computer", "HP", "840 G10", "SN-HP-002", "maintenance", 1, "维修中", "2025-09-01", 5999.00, "键盘故障送修"),
-            ("FW-2026-0001", "FortiGate 100F", "firewall", "Fortinet", "FG-100F", "SN-FGT-001", "assigned", 1, "机房A-01号柜", "2025-06-15", 35000.00, "边界防火墙"),
-            ("TAB-2026-0001", "iPad Air M2", "tablet", "Apple", "A2906", "SN-IPD-001", "scrapped", None, "已报废", "2025-03-20", 4799.00, "屏幕碎裂报废"),
+            ("PC-2026-0001", "ThinkPad T14s Gen 4", "computer", "Lenovo", "T14s Gen 4", "SN-LNV-001", "assigned", 2, "工位A-101", "2026-01-15", 6999.00, "研发主力机", "2029-01-15"),
+            ("PC-2026-0002", "MacBook Pro 14", "computer", "Apple", "M3 Pro 14", "SN-APL-001", "assigned", 3, "工位B-205", "2026-02-01", 14999.00, "设计用", "2029-02-01"),
+            ("MON-2026-0001", "DELL U2723QE", "monitor", "DELL", "U2723QE", "SN-DL-001", "assigned", 2, "工位A-101", "2026-01-15", 3299.00, "", "2029-01-15"),
+            ("PH-2026-0001", "iPhone 15 Pro", "phone", "Apple", "A3101", "SN-IPH-001", "in_stock", None, "仓库", "2026-01-20", 8999.00, "备机", "2027-01-20"),
+            ("PRN-2026-0001", "HP LaserJet Pro", "printer", "HP", "M404dn", "SN-HP-001", "assigned", 1, "IT部办公区", "2025-11-10", 2499.00, "共享打印机", "2026-06-15"),
+            ("SRV-2026-0001", "Dell PowerEdge R740", "server", "Dell", "R740", "SN-DL-SRV-001", "assigned", 1, "机房A-01号柜", "2025-06-15", 45000.00, "主服务器", "2025-12-15"),
+            ("NET-2026-0001", "Cisco C9300", "network", "Cisco", "C9300-48T", "SN-CSC-001", "assigned", 1, "机房A-02号柜", "2025-06-15", 28000.00, "核心交换", "2025-12-15"),
+            ("PC-2026-0003", "HP EliteBook 840", "computer", "HP", "840 G10", "SN-HP-002", "maintenance", 1, "维修中", "2025-09-01", 5999.00, "键盘故障送修", "2026-06-20"),
+            ("FW-2026-0001", "FortiGate 100F", "firewall", "Fortinet", "FG-100F", "SN-FGT-001", "assigned", 1, "机房A-01号柜", "2025-06-15", 35000.00, "边界防火墙", "2025-12-15"),
+            ("TAB-2026-0001", "iPad Air M2", "tablet", "Apple", "A2906", "SN-IPD-001", "scrapped", None, "已报废", "2025-03-20", 4799.00, "屏幕碎裂报废", None),
         ]
         for a in assets:
             conn.execute(
                 """INSERT INTO asset (asset_tag, name, category, brand, model, serial_number,
-                   status, current_holder_id, location, purchase_date, purchase_price, notes)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   status, current_holder_id, location, purchase_date, purchase_price, notes, warranty_date)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 a,
             )
 
@@ -91,8 +92,11 @@ def seed(db):
 
 def main():
     db_path = sys.argv[1] if len(sys.argv) > 1 else DB_PATH
+    db_existed = os.path.exists(db_path)
     db = Database(db_path)
     db.init_db()
+    if db_existed:
+        db.upgrade_db()
     seed(db)
     print(f"数据库已初始化并填充种子数据: {db_path}")
 
