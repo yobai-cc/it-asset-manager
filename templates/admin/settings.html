@@ -1,7 +1,12 @@
 {% extends "base.html" %}
 {% block title %}系统设置 - IT 资产管理{% endblock %}
 {% block content %}
-<h2>系统设置</h2>
+<div class="page-header">
+    <div>
+        <h1 class="page-title">系统设置</h1>
+        <p class="page-subtitle">管理企业 Logo、标签字段和二维码基础地址</p>
+    </div>
+</div>
 
 <div class="form-card" style="margin-bottom:24px;">
     <h3>企业 Logo</h3>
@@ -33,7 +38,7 @@
     <span id="labelSaveHint" style="color:var(--success);margin-left:8px;display:none;">已保存</span>
 
     <h4 style="margin-top:24px;margin-bottom:8px;">标签预览（60mm × 40mm）</h4>
-    <div id="labelPreview" style="border:1px dashed #999;padding:4px;display:inline-block;background:#f9f9f9;"></div>
+    <div id="labelPreview"></div>
 </div>
 
 <div class="form-card">
@@ -48,22 +53,18 @@
 {% endblock %}
 {% block scripts %}
 <script>
-const previewStyle = `
-.label-preview-card {
-    width: 60mm; height: 40mm;
-    border: 1px solid #333; padding: 2mm 3mm;
-    display: flex; flex-direction: row; align-items: center;
-    background: white; overflow: hidden; font-family: sans-serif;
-}
-.lp-left { flex: 1; min-width: 0; overflow: hidden; }
-.lp-logo { height: 5mm; margin-bottom: 1mm; object-fit: contain; }
-.lp-tag { font-size: 10pt; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.lp-field { font-size: 6pt; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #333; }
-.lp-right { flex-shrink: 0; margin-left: 2mm; }
-.lp-qr { width: 20mm; height: 20mm; background: #eee; display: flex; align-items: center; justify-content: center; font-size: 6pt; color: #999; }
-`;
-
 let currentLogo = '';
+const fieldLabels = {name:'名称',serial_number:'序列号',holder:'持有人',location:'位置',brand:'品牌',model:'型号'};
+const previewAsset = {
+    id: 0,
+    asset_tag: 'PC-2026-0001',
+    name: 'ThinkPad T14s',
+    serial_number: 'SN-LNV-001',
+    holder_name: '张三',
+    location: '工位A-101',
+    brand: 'Lenovo',
+    model: 'T14s Gen 4',
+};
 
 async function loadAll() {
     const [labelRes, qrRes, logoRes] = await Promise.all([
@@ -82,11 +83,21 @@ async function loadAll() {
 function renderLogoPreview() {
     const el = document.getElementById('logoPreview');
     const delBtn = document.getElementById('deleteLogoBtn');
+    el.replaceChildren();
     if (currentLogo) {
-        el.innerHTML = `<img src="${currentLogo}" style="max-width:110px;max-height:44px;object-fit:contain;">`;
+        const img = document.createElement('img');
+        img.src = currentLogo;
+        img.alt = 'Logo';
+        img.style.maxWidth = '110px';
+        img.style.maxHeight = '44px';
+        img.style.objectFit = 'contain';
+        el.appendChild(img);
         delBtn.style.display = 'inline-block';
     } else {
-        el.innerHTML = '<span class="text-muted">暂无 Logo</span>';
+        const span = document.createElement('span');
+        span.className = 'text-muted';
+        span.textContent = '暂无 Logo';
+        el.appendChild(span);
         delBtn.style.display = 'none';
     }
 }
@@ -94,23 +105,26 @@ function renderLogoPreview() {
 function renderLabelPreview(fields) {
     fields = fields || ['name'];
     const el = document.getElementById('labelPreview');
-    let logoHtml = currentLogo ? `<img src="${currentLogo}" class="lp-logo">` : '';
-    let fieldsHtml = '';
-    fields.forEach(f => {
-        const labels = {name:'ThinkPad T14s',serial_number:'SN-LNV-001',holder:'张三',location:'工位A-101',brand:'Lenovo',model:'T14s Gen 4'};
-        if (labels[f]) fieldsHtml += `<div class="lp-field">${labels[f]}</div>`;
+    const label = createPhysicalLabel(previewAsset, '', {dimensions: true, logoUrl: currentLogo});
+    const meta = label.querySelector('.label-meta-tags');
+    fields.forEach(field => {
+        if (field === 'name' || field === 'serial_number') return;
+        const value = field === 'holder' ? previewAsset.holder_name : previewAsset[field];
+        if (!value) return;
+        const line = document.createElement('div');
+        line.className = 'label-tag-sn';
+        line.textContent = `${fieldLabels[field] || field}: ${value}`;
+        meta.appendChild(line);
     });
-    el.innerHTML = `<style>${previewStyle}</style>
-    <div class="label-preview-card">
-        <div class="lp-left">
-            ${logoHtml}
-            <div class="lp-tag">PC-2026-0001</div>
-            ${fieldsHtml}
-        </div>
-        <div class="lp-right">
-            <div class="lp-qr">QR</div>
-        </div>
-    </div>`;
+    const qrWrap = label.querySelector('.qr-code-wrapper');
+    qrWrap.replaceChildren();
+    const qrMock = document.createElement('span');
+    qrMock.style.fontSize = '10px';
+    qrMock.style.fontWeight = '800';
+    qrMock.style.color = 'var(--color-text-muted)';
+    qrMock.textContent = 'QR';
+    qrWrap.appendChild(qrMock);
+    el.replaceChildren(label);
 }
 
 async function uploadLogo() {

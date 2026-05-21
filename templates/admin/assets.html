@@ -1,163 +1,276 @@
 {% extends "base.html" %}
 {% block title %}资产列表 - IT 资产管理{% endblock %}
 {% block content %}
-<h2>资产列表
-    <a href="/assets/new" class="btn btn-primary btn-sm">新增资产</a>
-    <button class="btn btn-secondary btn-sm" onclick="showImportModal()">批量导入</button>
-</h2>
-<div class="filter-bar">
-    <input type="text" id="searchInput" placeholder="搜索标签号/名称/序列号/品牌..." class="input">
-    <select id="categoryFilter" class="input">
-        <option value="">全部类别</option>
-        <option value="computer">电脑</option><option value="monitor">显示器</option>
-        <option value="phone">手机</option><option value="tablet">平板</option>
-        <option value="printer">打印机</option><option value="server">服务器</option>
-        <option value="network">网络设备</option><option value="firewall">防火墙</option>
-        <option value="switch">交换机</option>
-    </select>
-    <select id="statusFilter" class="input">
-        <option value="">全部状态</option>
-        <option value="in_stock">库存</option><option value="assigned">在用</option>
-        <option value="maintenance">维修中</option><option value="scrapped">已报废</option>
-    </select>
-    <button class="btn btn-secondary" onclick="loadAssets()">搜索</button>
-    <button class="btn btn-primary" onclick="exportCSV()">导出CSV</button>
+<div class="page-header">
+    <div>
+        <h1 class="page-title">资产台账</h1>
+        <p class="page-subtitle">管理所有固定资产，点击行查看详情</p>
+    </div>
+    <div class="page-actions">
+        <button class="btn btn-secondary" type="button" onclick="showImportModal()">批量导入</button>
+        <button class="btn btn-secondary" type="button" onclick="exportCSV()">导出CSV</button>
+        <a href="/assets/new" class="btn btn-primary">新增资产</a>
+    </div>
 </div>
 
-<!-- 批量导入对话框 -->
+<div class="asset-toolbar">
+    <div class="asset-toolbar-left">
+        <div class="status-tabs" id="statusTabs" aria-label="状态筛选">
+            <button type="button" class="status-tab active" data-status="">全部</button>
+            <button type="button" class="status-tab" data-status="assigned">在用</button>
+            <button type="button" class="status-tab" data-status="in_stock">库存</button>
+            <button type="button" class="status-tab" data-status="maintenance">维修中</button>
+            <button type="button" class="status-tab" data-status="scrapped">已报废</button>
+        </div>
+        <select id="categoryFilter" class="input" aria-label="类别筛选">
+            <option value="">全部类别</option>
+            <option value="computer">电脑</option><option value="monitor">显示器</option>
+            <option value="phone">手机</option><option value="tablet">平板</option>
+            <option value="printer">打印机</option><option value="server">服务器</option>
+            <option value="network">网络设备</option><option value="firewall">防火墙</option>
+            <option value="switch">交换机</option>
+        </select>
+    </div>
+    <div class="asset-toolbar-right">
+        <input type="text" id="searchInput" placeholder="搜索标签号/名称/序列号/品牌..." class="input">
+        <button class="btn btn-secondary" type="button" onclick="loadAssets()">搜索</button>
+    </div>
+</div>
+
 <div id="importModal" class="modal" style="display:none;">
     <div class="modal-content">
         <h3>批量导入资产</h3>
-        <p class="text-muted" style="margin-bottom:12px;">上传 CSV 文件，格式与"导出CSV"一致。必填列：<code>name</code>、<code>category</code>。分类值必须为英文（computer, monitor, phone, tablet, printer, server, network, firewall, switch）。</p>
+        <p class="text-muted" style="margin-bottom:var(--space-2);">上传 CSV 文件，格式与导出 CSV 一致。必填列：<code>name</code>、<code>category</code>。</p>
         <div class="form-group">
             <input type="file" id="importFile" accept=".csv" class="input">
         </div>
-        <div style="display:flex;gap:8px;">
-            <button class="btn btn-primary" onclick="doImport()" id="importBtn">开始导入</button>
-            <button class="btn btn-secondary" onclick="document.getElementById('importModal').style.display='none'">取消</button>
+        <div class="page-actions">
+            <button class="btn btn-primary" type="button" onclick="doImport()" id="importBtn">开始导入</button>
+            <button class="btn btn-secondary" type="button" onclick="document.getElementById('importModal').style.display='none'">取消</button>
         </div>
-        <div id="importResult" style="margin-top:16px;display:none;">
+        <div id="importResult" style="margin-top:var(--space-2);display:none;">
             <div id="importResultContent"></div>
         </div>
     </div>
 </div>
 
 <div class="batch-bar" id="batchBar" style="display:none;">
-    <span id="selectedCount">0</span> 项已选
-    <button class="btn btn-secondary btn-sm" onclick="batchPrintLabels()">批量打印标签</button>
+    <span><strong id="selectedCount">0</strong> 项已选</span>
+    <button class="btn btn-secondary btn-sm" type="button" onclick="batchPrintLabels()">批量打印标签</button>
 </div>
-<table class="table" id="assetsTable">
-    <thead><tr>
-        <th><input type="checkbox" id="selectAll" onchange="toggleSelectAll(this)"></th>
-        <th>标签号</th><th>名称</th><th>类别</th><th>状态</th><th>持有人</th><th>位置</th><th>操作</th>
-    </tr></thead>
-    <tbody id="assetsBody"></tbody>
-</table>
+
+<div class="table-shell">
+    <table class="asset-data-table" id="assetsTable" style="table-layout:fixed;">
+        <colgroup>
+            <col style="width:40px">
+            <col style="width:12%">
+            <col style="width:24%">
+            <col style="width:10%">
+            <col style="width:8%">
+            <col style="width:10%">
+            <col style="width:10%">
+            <col style="width:14%">
+        </colgroup>
+        <thead>
+            <tr>
+                <th><input type="checkbox" id="selectAll" class="row-select" onchange="toggleSelectAll(this)" aria-label="全选"></th>
+                <th>标签号</th>
+                <th>资产</th>
+                <th>类别</th>
+                <th>状态</th>
+                <th>持有人</th>
+                <th>位置</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody id="asset-table-body"></tbody>
+    </table>
+</div>
 <div class="pagination" id="pagination"></div>
 {% endblock %}
 {% block scripts %}
 <script>
 let currentPage = 1;
+let currentStatus = '';
 const statusLabels = {in_stock:'库存',assigned:'在用',maintenance:'维修中',scrapped:'已报废'};
 const catLabels = {computer:'电脑',monitor:'显示器',phone:'手机',tablet:'平板',printer:'打印机',server:'服务器',network:'网络设备',firewall:'防火墙',switch:'交换机'};
-const catIcons = {computer:'\u{1F4BB}',monitor:'\u{1F5A5}',phone:'\u{1F4F1}',tablet:'\u{1F4CB}',printer:'\u{1F5A8}',server:'\u{1F5C4}',network:'\u{1F310}',firewall:'\u{1F6E1}',switch:'\u{1F500}'};
-const catColors = {computer:'#2563eb',monitor:'#7c3aed',phone:'#059669',tablet:'#d97706',printer:'#dc2626',server:'#475569',network:'#0891b2',firewall:'#be185d',switch:'#65a30d'};
+const catColors = {computer:'#2563eb',monitor:'#7c3aed',phone:'#059669',tablet:'#d97706',printer:'#ef4444',server:'#475569',network:'#0891b2',firewall:'#be185d',switch:'#65a30d'};
 const statusClasses = {in_stock:'badge-instock',assigned:'badge-assigned',maintenance:'badge-maintenance',scrapped:'badge-scrapped'};
+const labelFieldLabels = {name:'名称',serial_number:'序列号',holder:'持有人',location:'位置',brand:'品牌',model:'型号'};
+
+function appendTextCell(row, text) {
+    const td = document.createElement('td');
+    td.textContent = text || '-';
+    row.appendChild(td);
+    return td;
+}
+
+function createButtonLink(href, label, className) {
+    const link = document.createElement('a');
+    link.href = href;
+    link.className = className || 'btn btn-sm btn-secondary';
+    link.textContent = label;
+    return link;
+}
+
+function getInitialSearch() {
+    return new URLSearchParams(window.location.search).get('search') || '';
+}
 
 async function loadAssets(page = 1) {
     currentPage = page;
-    const search = document.getElementById('searchInput').value;
+    const search = document.getElementById('searchInput').value.trim();
     const category = document.getElementById('categoryFilter').value;
-    const status = document.getElementById('statusFilter').value;
     let url = `/api/assets?page=${page}&limit=15`;
     if (search) url += `&search=${encodeURIComponent(search)}`;
-    if (category) url += `&category=${category}`;
-    if (status) url += `&status=${status}`;
+    if (category) url += `&category=${encodeURIComponent(category)}`;
+    if (currentStatus) url += `&status=${encodeURIComponent(currentStatus)}`;
     const data = await apiFetch(url);
-    const tbody = document.getElementById('assetsBody');
-    tbody.innerHTML = '';
-    data.assets.forEach(a => {
-        tbody.innerHTML += `<tr>
-            <td><input type="checkbox" class="asset-checkbox" value="${a.id}"></td>
-            <td><a href="/assets/${a.id}">${a.asset_tag}</a></td>
-            <td>${a.name}</td>
-            <td><span class="cat-badge" style="background:${catColors[a.category]||'#64748b'}15;color:${catColors[a.category]||'#64748b'}">${catIcons[a.category]||''} ${catLabels[a.category]||a.category}</span></td>
-            <td><span class="badge ${statusClasses[a.status]}">${statusLabels[a.status]||a.status}</span></td>
-            <td>${a.holder_name||'-'}</td>
-            <td>${a.location||'-'}</td>
-            <td><a href="/assets/${a.id}" class="btn btn-sm btn-secondary">详情</a>
-                <a href="/assets/${a.id}/label" class="btn btn-sm btn-secondary" target="_blank">标签</a></td>
-        </tr>`;
+    const tbody = document.getElementById('asset-table-body');
+    tbody.replaceChildren();
+    data.assets.forEach(asset => {
+        const row = document.createElement('tr');
+        row.dataset.id = asset.id;
+
+        const selectTd = document.createElement('td');
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.className = 'asset-checkbox row-select';
+        checkbox.value = asset.id;
+        checkbox.setAttribute('aria-label', `选择 ${asset.asset_tag}`);
+        selectTd.appendChild(checkbox);
+        row.appendChild(selectTd);
+
+        const tagTd = document.createElement('td');
+        const tagLink = document.createElement('a');
+        tagLink.href = `/assets/${asset.id}`;
+        tagLink.textContent = asset.asset_tag;
+        tagTd.appendChild(tagLink);
+        row.appendChild(tagTd);
+
+        const nameTd = document.createElement('td');
+        const nameWrap = document.createElement('div');
+        nameWrap.className = 'asset-name-cell';
+        const name = document.createElement('span');
+        name.className = 'asset-name-main';
+        name.textContent = asset.name || '-';
+        const sub = document.createElement('span');
+        sub.className = 'asset-name-sub';
+        sub.textContent = [asset.brand, asset.model, asset.serial_number].filter(Boolean).join(' · ') || '无型号信息';
+        nameWrap.append(name, sub);
+        nameTd.appendChild(nameWrap);
+        row.appendChild(nameTd);
+
+        const catTd = document.createElement('td');
+        const cat = document.createElement('span');
+        cat.className = 'cat-badge';
+        cat.style.color = catColors[asset.category] || '#64748b';
+        cat.style.backgroundColor = `${catColors[asset.category] || '#64748b'}1A`;
+        cat.textContent = catLabels[asset.category] || asset.category;
+        catTd.appendChild(cat);
+        row.appendChild(catTd);
+
+        const statusTd = document.createElement('td');
+        const badge = document.createElement('span');
+        badge.className = `badge ${statusClasses[asset.status] || ''}`.trim();
+        badge.textContent = statusLabels[asset.status] || asset.status;
+        statusTd.appendChild(badge);
+        row.appendChild(statusTd);
+
+        appendTextCell(row, asset.holder_name);
+        appendTextCell(row, asset.location);
+
+        const actionTd = document.createElement('td');
+        actionTd.appendChild(createButtonLink(`/assets/${asset.id}`, '详情'));
+        const label = createButtonLink(`/assets/${asset.id}/label`, '标签');
+        label.target = '_blank';
+        actionTd.appendChild(label);
+        row.appendChild(actionTd);
+        tbody.appendChild(row);
     });
+    document.getElementById('selectAll').checked = false;
+    updateBatchBar();
     renderPagination(data.total, data.page, data.limit);
 }
 
 function renderPagination(total, page, limit) {
     const pages = Math.ceil(total / limit);
     const el = document.getElementById('pagination');
-    if (pages <= 1) { el.innerHTML = ''; return; }
-    let html = '';
-    if (page > 1) html += `<a class="page-btn" onclick="loadAssets(${page-1})">上一页</a>`;
-    for (let i = 1; i <= pages; i++) {
-        html += `<a class="page-btn ${i===page?'active':''}" onclick="loadAssets(${i})">${i}</a>`;
+    el.replaceChildren();
+    if (pages <= 1) return;
+    if (page > 1) el.appendChild(createPageButton('上一页', () => loadAssets(page - 1)));
+    for (let i = 1; i <= pages; i += 1) {
+        el.appendChild(createPageButton(String(i), () => loadAssets(i), i === page));
     }
-    if (page < pages) html += `<a class="page-btn" onclick="loadAssets(${page+1})">下一页</a>`;
-    el.innerHTML = html;
+    if (page < pages) el.appendChild(createPageButton('下一页', () => loadAssets(page + 1)));
+}
+
+function createPageButton(label, handler, active = false) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `page-btn${active ? ' active' : ''}`;
+    button.textContent = label;
+    button.addEventListener('click', handler);
+    return button;
 }
 
 function toggleSelectAll(cb) {
-    document.querySelectorAll('.asset-checkbox').forEach(c => c.checked = cb.checked);
+    document.querySelectorAll('.asset-checkbox').forEach(box => {
+        box.checked = cb.checked;
+    });
     updateBatchBar();
 }
-
-document.addEventListener('change', e => {
-    if (e.target.classList.contains('asset-checkbox')) updateBatchBar();
-});
 
 function updateBatchBar() {
     const checked = document.querySelectorAll('.asset-checkbox:checked');
     document.getElementById('selectedCount').textContent = checked.length;
-    document.getElementById('batchBar').style.display = checked.length > 0 ? 'block' : 'none';
+    document.getElementById('batchBar').style.display = checked.length > 0 ? 'flex' : 'none';
+}
+
+function escapePrintText(value) {
+    return String(value || '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
+
+function buildPrintLabel(asset, fields, logoUrl) {
+    const values = fields.map(field => {
+        if (field === 'name') return '';
+        const value = field === 'holder' ? asset.holder_name : asset[field];
+        return value ? `<div class="label-field">${escapePrintText(labelFieldLabels[field] || field)}：${escapePrintText(value)}</div>` : '';
+    }).join('');
+    const logo = logoUrl ? `<img src="${escapePrintText(logoUrl)}" class="label-logo" alt="Logo">` : '<div class="label-logo-text">IT</div>';
+    return `<div class="label-card">
+        <div class="label-top">
+            ${logo}
+            <div class="label-meta">
+                <div class="label-name">${escapePrintText(asset.name)}</div>
+                <div class="label-asset-tag">${escapePrintText(asset.asset_tag)}</div>
+                ${asset.serial_number ? `<div class="label-field">SN：${escapePrintText(asset.serial_number)}</div>` : ''}
+                ${values}
+            </div>
+        </div>
+        <div class="label-bottom">
+            <div class="label-number">${escapePrintText(String(asset.asset_tag || asset.id || '').replace(/\\D/g, '').slice(-7) || String(asset.id || '-'))}</div>
+            <img src="/api/assets/${asset.id}/qr" class="label-qr" alt="QR">
+        </div>
+    </div>`;
 }
 
 async function batchPrintLabels() {
-    const ids = [...document.querySelectorAll('.asset-checkbox:checked')].map(c => parseInt(c.value));
+    const ids = [...document.querySelectorAll('.asset-checkbox:checked')].map(box => parseInt(box.value, 10));
     if (!ids.length) return;
     const [data, settings, logoData] = await Promise.all([
-        apiFetch('/api/batch-labels', { method: 'POST', body: JSON.stringify({ asset_ids: ids }) }),
+        apiFetch('/api/batch-labels', {method: 'POST', body: JSON.stringify({asset_ids: ids})}),
         apiFetch('/api/settings/label'),
         apiFetch('/api/settings/logo'),
     ]);
     const fields = settings.fields || ['name'];
     const logoUrl = logoData.logo || '';
-    const w = window.open('', '_blank');
-    const labelStyle = `*{margin:0;padding:0;box-sizing:border-box}body{background:#f5f5f5;font-family:sans-serif;padding:20px}.label-card{width:60mm;height:40mm;border:1px solid #ccc;padding:2mm 3mm;display:inline-flex;flex-direction:row;align-items:center;background:white;margin:3mm;page-break-inside:avoid;overflow:hidden}.label-left{flex:1;min-width:0;overflow:hidden}.label-logo{height:5mm;margin-bottom:1mm;object-fit:contain}.label-asset-tag{font-size:10pt;font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.label-field{font-size:6pt;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#333}.label-right{flex-shrink:0;margin-left:2mm}.label-qr{width:20mm;height:20mm}@media print{.no-print{display:none!important}body{background:white;padding:0;margin:0}.label-card{border:1px solid #000;margin:0}}`;
-    let html = `<html><head><meta charset="UTF-8"><style>${labelStyle}</style><title>批量标签</title></head><body><div class="no-print" style="margin-bottom:20px"><button onclick="window.print()" style="padding:10px 20px;font-size:16px;">打印标签</button></div>`;
-    for (const a of data.assets) {
-        let fieldsHtml = '';
-        fields.forEach(f => {
-            const val = f === 'holder' ? (a.holder_name || '') : (a[f] || '');
-            if (val) fieldsHtml += `<div class="label-field">${val}</div>`;
-        });
-        let logoHtml = logoUrl ? `<img src="${logoUrl}" class="label-logo" alt="Logo">` : '';
-        html += `<div class="label-card">
-            <div class="label-left">
-                ${logoHtml}
-                <div class="label-asset-tag">${a.asset_tag}</div>
-                ${fieldsHtml}
-            </div>
-            <div class="label-right">
-                <img src="/api/assets/${a.id}/qr" class="label-qr" alt="QR">
-            </div>
-        </div>`;
-    }
-    html += '</body></html>';
-    w.document.write(html);
-    w.document.close();
+    const printWindow = window.open('', '_blank');
+    const labelStyle = `*{margin:0;padding:0;box-sizing:border-box}body{background:#f8fafc;font-family:sans-serif;padding:16px}.no-print{margin-bottom:16px}.label-card{width:60mm;height:40mm;border:1px dashed #64748b;border-radius:4px;padding:3mm;display:inline-flex;flex-direction:column;justify-content:space-between;background:#fff;margin:8px;page-break-inside:avoid;color:#0f172a;line-height:1.2}.label-top{display:flex;align-items:center;gap:3mm;min-width:0}.label-logo{width:32px;height:32px;object-fit:contain;flex-shrink:0}.label-logo-text{width:32px;height:32px;border:1px solid #e2e8f0;border-radius:4px;color:#2563eb;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0}.label-meta{min-width:0;overflow:hidden}.label-name{font-size:12px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.label-asset-tag,.label-field{font-size:9px;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#64748b}.label-bottom{display:flex;align-items:flex-end;justify-content:space-between;gap:3mm}.label-number{font-size:18px;font-weight:900}.label-qr{width:20mm;height:20mm;border:1px solid #e2e8f0;padding:2px;flex-shrink:0}@media print{.no-print{display:none!important}body{background:#fff;padding:0}.label-card{border:1px solid #000;margin:0}@page{size:60mm 40mm;margin:0}}`;
+    const labels = data.assets.map(asset => buildPrintLabel(asset, fields, logoUrl)).join('');
+    printWindow.document.write(`<html><head><meta charset="UTF-8"><title>批量标签</title><style>${labelStyle}</style></head><body><div class="no-print"><button onclick="window.print()">打印标签</button></div>${labels}</body></html>`);
+    printWindow.document.close();
 }
-
-document.getElementById('searchInput').addEventListener('keydown', e => { if (e.key === 'Enter') loadAssets(); });
-loadAssets();
 
 function showImportModal() {
     document.getElementById('importFile').value = '';
@@ -168,42 +281,89 @@ function showImportModal() {
 
 async function doImport() {
     const file = document.getElementById('importFile').files[0];
-    if (!file) { alert('请选择 CSV 文件'); return; }
+    if (!file) {
+        alert('请选择 CSV 文件');
+        return;
+    }
     document.getElementById('importBtn').disabled = true;
     const fd = new FormData();
     fd.append('file', file);
     try {
         const res = await fetch('/api/assets/import', {method: 'POST', body: fd});
         const data = await res.json();
-        if (!res.ok) { alert(data.error || '导入失败'); document.getElementById('importBtn').disabled = false; return; }
-        const el = document.getElementById('importResult');
-        el.style.display = 'block';
-        let html = `<p style="color:var(--success);font-weight:600;margin-bottom:8px;">导入完成：成功 ${data.success} 条${data.errors.length > 0 ? '，失败 ' + data.errors.length + ' 条' : ''}</p>`;
-        if (data.errors.length > 0) {
-            html += '<table class="table" style="margin-top:8px;"><thead><tr><th>行号</th><th>错误</th></tr></thead><tbody>';
-            data.errors.forEach(e => { html += `<tr><td>第 ${e.row} 行</td><td>${e.error}</td></tr>`; });
-            html += '</tbody></table>';
+        if (!res.ok) {
+            alert(data.error || '导入失败');
+            document.getElementById('importBtn').disabled = false;
+            return;
         }
-        document.getElementById('importResultContent').innerHTML = html;
+        renderImportResult(data);
         loadAssets();
-    } catch(e) {
-        alert('上传失败: ' + e.message);
+    } catch (err) {
+        alert('上传失败: ' + err.message);
         document.getElementById('importBtn').disabled = false;
     }
 }
 
+function renderImportResult(data) {
+    const wrap = document.getElementById('importResult');
+    const content = document.getElementById('importResultContent');
+    wrap.style.display = 'block';
+    content.replaceChildren();
+    const summary = document.createElement('p');
+    summary.style.color = 'var(--color-success)';
+    summary.style.fontWeight = '700';
+    summary.textContent = `导入完成：成功 ${data.success} 条${data.errors.length ? `，失败 ${data.errors.length} 条` : ''}`;
+    content.appendChild(summary);
+    if (data.errors.length) {
+        const table = document.createElement('table');
+        table.className = 'table';
+        const tbody = document.createElement('tbody');
+        data.errors.forEach(error => {
+            const row = document.createElement('tr');
+            appendTextCell(row, `第 ${error.row} 行`);
+            appendTextCell(row, error.error);
+            tbody.appendChild(row);
+        });
+        table.appendChild(tbody);
+        content.appendChild(table);
+    }
+}
+
 function exportCSV() {
-    const search = document.getElementById('searchInput').value;
+    const search = document.getElementById('searchInput').value.trim();
     const category = document.getElementById('categoryFilter').value;
-    const status = document.getElementById('statusFilter').value;
     const checked = [...document.querySelectorAll('.asset-checkbox:checked')];
-    let url = '/api/assets/export?';
     const params = [];
     if (search) params.push(`search=${encodeURIComponent(search)}`);
-    if (category) params.push(`category=${category}`);
-    if (status) params.push(`status=${status}`);
-    if (checked.length > 0) params.push(`ids=${checked.map(c => c.value).join(',')}`);
-    window.location.href = url + params.join('&');
+    if (category) params.push(`category=${encodeURIComponent(category)}`);
+    if (currentStatus) params.push(`status=${encodeURIComponent(currentStatus)}`);
+    if (checked.length > 0) params.push(`ids=${checked.map(box => box.value).join(',')}`);
+    window.location.href = '/api/assets/export?' + params.join('&');
 }
+
+document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('searchInput').value = getInitialSearch();
+    document.getElementById('searchInput').addEventListener('keydown', event => {
+        if (event.key === 'Enter') loadAssets();
+    });
+    document.getElementById('categoryFilter').addEventListener('change', () => loadAssets());
+    document.getElementById('statusTabs').addEventListener('click', event => {
+        const tab = event.target.closest('.status-tab');
+        if (!tab) return;
+        currentStatus = tab.dataset.status || '';
+        document.querySelectorAll('.status-tab').forEach(item => item.classList.toggle('active', item === tab));
+        loadAssets();
+    });
+    document.getElementById('asset-table-body').addEventListener('click', event => {
+        if (event.target.closest('.row-select, a, button')) return;
+        const row = event.target.closest('tr');
+        if (row && row.dataset.id) openAssetDetailDrawer(row.dataset.id);
+    });
+    document.addEventListener('change', event => {
+        if (event.target.classList.contains('asset-checkbox')) updateBatchBar();
+    });
+    document.addEventListener('asset:changed', () => loadAssets(currentPage));
+    loadAssets();
+});
 </script>
 {% endblock %}

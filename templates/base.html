@@ -6,54 +6,297 @@
     <title>{% block title %}IT 资产管理{% endblock %}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-<body>
-    <nav class="navbar">
-        <div class="nav-brand">
-            <a href="/">IT 资产管理</a>
+<body class="{% if user and user.role == 'admin' %}admin-shell{% elif user %}employee-shell{% else %}public-shell{% endif %}">
+    {% if user and user.role == 'admin' %}
+    <div class="app-container">
+        <aside class="app-sidebar" aria-label="主导航">
+            <div class="sidebar-brand">
+                <a href="/dashboard" class="brand-logo" aria-label="IT 资产管理">IT</a>
+                <span class="brand-text">IT 资产管理</span>
+            </div>
+            <nav class="sidebar-menu">
+                <a href="/dashboard" class="menu-item {% if request.path == '/dashboard' %}active{% endif %}" aria-label="仪表盘"><span class="icon-dash"></span>仪表盘</a>
+                <a href="/assets" class="menu-item {% if request.path.startswith('/assets') %}active{% endif %}" aria-label="资产台账"><span class="icon-asset"></span>资产台账</a>
+                <a href="/applications" class="menu-item {% if request.path == '/applications' %}active{% endif %}" aria-label="申请审核"><span class="icon-app"></span>申请审核</a>
+                <a href="/maintenance" class="menu-item {% if request.path == '/maintenance' %}active{% endif %}" aria-label="维修总览"><span class="icon-maint"></span>维修总览</a>
+                <a href="/activity" class="menu-item {% if request.path == '/activity' %}active{% endif %}" aria-label="操作记录"><span class="icon-log"></span>操作记录</a>
+                <a href="/settings" class="menu-item {% if request.path == '/settings' %}active{% endif %}" aria-label="系统设置"><span class="icon-set"></span>系统设置</a>
+            </nav>
+        </aside>
+
+        <div class="app-main-wrapper">
+            <header class="main-header">
+                <div class="header-search-bar">
+                    <input type="text" id="global-search" placeholder="搜索资产名称、编号...">
+                </div>
+                <div class="header-actions">
+                    <a href="/scan" class="icon-button" aria-label="扫码" title="扫码"><span class="icon-scan"></span></a>
+                    <span class="icon-button" aria-hidden="true"><span class="icon-notice"></span></span>
+                    <span class="user-avatar" title="{{ user.name }}">{{ user.name[:1] }}</span>
+                    <button type="button" class="icon-button" data-logout aria-label="退出" title="退出"><span class="icon-logout"></span></button>
+                </div>
+            </header>
+
+            <main class="main-content">
+    {% else %}
+    <div class="simple-shell">
+        {% if user %}
+        <nav class="simple-nav">
+            <a href="/my/assets" class="simple-brand">IT 资产管理</a>
+            <div class="simple-nav-links" id="navLinks">
+                <a href="/my/assets">我的资产</a>
+                <a href="/my/applications">我的申请</a>
+                <a href="/my/applications/new">提交申请</a>
+                <span class="nav-user">{{ user.name }}</span>
+                <button type="button" class="btn btn-secondary btn-sm" data-logout>退出</button>
+            </div>
+            <button class="nav-toggle" type="button" data-nav-toggle aria-label="切换菜单">☰</button>
+        </nav>
+        {% endif %}
+        <main class="container">
+    {% endif %}
+
+                {% block content %}{% endblock %}
+
+    {% if user and user.role == 'admin' %}
+            </main>
         </div>
-        <div class="nav-links" id="navLinks">
-            {% if user %}
-            {% if user.role == 'admin' %}
-            <a href="/dashboard">仪表盘</a>
-            <a href="/assets">资产列表</a>
-            <a href="/assets/new">新增资产</a>
-            <a href="/applications">申请审核</a>
-            <a href="/maintenance">维修总览</a>
-            <a href="/activity">操作记录</a>
-            <a href="/settings">系统设置</a>
-            {% else %}
-            <a href="/my/assets">我的资产</a>
-            <a href="/my/applications">我的申请</a>
-            <a href="/my/applications/new">提交申请</a>
-            {% endif %}
-            <span class="nav-user">{{ user.name }} ({{ '管理员' if user.role == 'admin' else '员工' }})</span>
-            <a href="#" onclick="fetch('/api/logout',{method:'POST'}).then(()=>location='/login')">退出</a>
-            {% endif %}
-        </div>
-        <button class="nav-toggle" onclick="document.getElementById('navLinks').classList.toggle('show')">
-            ☰
-        </button>
-    </nav>
-    <main class="container">
-        {% block content %}{% endblock %}
-    </main>
-    <footer class="footer">
-        <p>IT 资产管理系统 MVP</p>
-    </footer>
+
+        <div id="global-detail-drawer" class="detail-drawer" aria-live="polite"></div>
+    </div>
+    {% else %}
+        </main>
+    </div>
+    {% endif %}
+
     <script>
-    // 通用工具函数
     async function apiFetch(url, options = {}) {
-        const res = await fetch(url, {
-            headers: { 'Content-Type': 'application/json', ...options.headers },
-            ...options,
-        });
+        const headers = options.body instanceof FormData
+            ? {...options.headers}
+            : {'Content-Type': 'application/json', ...options.headers};
+        const res = await fetch(url, {headers, ...options});
         const data = await res.json();
         if (!res.ok) {
             alert(data.error || '操作失败');
-            throw new Error(data.error);
+            throw new Error(data.error || '操作失败');
         }
         return data;
     }
+
+    const drawerStatusLabels = {in_stock:'库存', assigned:'在用', maintenance:'维修中', scrapped:'已报废'};
+    const drawerStatusClasses = {in_stock:'badge-instock', assigned:'badge-assigned', maintenance:'badge-maintenance', scrapped:'badge-scrapped'};
+    const drawerCatLabels = {computer:'电脑', monitor:'显示器', phone:'手机', tablet:'平板', printer:'打印机', server:'服务器', network:'网络设备', firewall:'防火墙', switch:'交换机'};
+    const drawerCatIcons = {computer:'PC', monitor:'MON', phone:'TEL', tablet:'TAB', printer:'PRN', server:'SRV', network:'NET', firewall:'FW', switch:'SW'};
+    const drawerEventNames = {stock_in:'入库', assign:'分配', return:'归还', transfer:'转移', maintenance_start:'送修', maintenance_end:'维修完成', scrap:'报废', label_print:'打印标签'};
+
+    function makeEl(tag, className, text) {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined && text !== null) node.textContent = text;
+        return node;
+    }
+
+    function formatDrawerDate(value) {
+        if (!value) return '-';
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return value;
+        return date.toLocaleString('zh-CN');
+    }
+
+    function appendMetaItem(grid, label, value) {
+        const item = makeEl('div', 'drawer-meta-item');
+        item.appendChild(makeEl('span', 'drawer-meta-label', label));
+        item.appendChild(makeEl('strong', 'drawer-meta-value', value || '-'));
+        grid.appendChild(item);
+    }
+
+    function timelineTone(eventType) {
+        if (eventType === 'stock_in' || eventType === 'label_print') return 'info';
+        if (eventType === 'assign' || eventType === 'return' || eventType === 'transfer') return 'warning';
+        if (eventType === 'maintenance_start' || eventType === 'maintenance_end' || eventType === 'scrap') return 'danger';
+        return 'info';
+    }
+
+    function createTimelineNode(event) {
+        const item = makeEl('div', 'timeline-node');
+        item.dataset.tone = timelineTone(event.event_type);
+        const dot = makeEl('span', 'timeline-node-dot');
+        const body = makeEl('div', 'timeline-node-body');
+        const title = makeEl('h5', '', drawerEventNames[event.event_type] || event.event_type);
+        const metaText = [formatDrawerDate(event.created_at), event.operator_name, event.target_user_name].filter(Boolean).join(' · ');
+        const meta = makeEl('p', 'timeline-node-meta', metaText);
+        body.append(title, meta);
+        if (event.notes) body.appendChild(makeEl('p', 'timeline-node-desc', event.notes));
+        item.append(dot, body);
+        return item;
+    }
+
+    function createPhysicalLabel(asset, qrSrc, options = {}) {
+        const label = makeEl('div', `physical-label-preview${options.compact ? ' is-compact' : ''}`);
+        const header = makeEl('div', 'label-header');
+        const logo = makeEl('div', 'label-logo-placeholder');
+        if (options.logoUrl) {
+            const logoImg = document.createElement('img');
+            logoImg.src = options.logoUrl;
+            logoImg.alt = 'Logo';
+            logoImg.className = 'label-logo-image';
+            logo.appendChild(logoImg);
+        } else {
+            logo.textContent = 'IT';
+        }
+        const meta = makeEl('div', 'label-meta-tags');
+        meta.appendChild(makeEl('div', 'label-title-text', asset.name || '-'));
+        meta.appendChild(makeEl('div', 'label-tag-sn', asset.asset_tag || '-'));
+        if (asset.serial_number) meta.appendChild(makeEl('div', 'label-tag-sn', 'SN: ' + asset.serial_number));
+        header.append(logo, meta);
+
+        const footer = makeEl('div', 'label-footer-zone');
+        const numeric = String(asset.asset_tag || asset.id || '').replace(/\D/g, '').slice(-7) || String(asset.id || '-');
+        footer.appendChild(makeEl('div', 'numeric-tag-id', numeric));
+        const qrWrap = makeEl('div', 'qr-code-wrapper');
+        const qr = document.createElement('img');
+        qr.src = qrSrc;
+        qr.alt = 'QR';
+        qr.className = 'qr-image';
+        qrWrap.appendChild(qr);
+        footer.appendChild(qrWrap);
+
+        label.append(header, footer);
+        if (options.dimensions !== false) {
+            label.appendChild(makeEl('div', 'dim-indicator height-indicator', '40mm'));
+            label.appendChild(makeEl('div', 'dim-indicator width-indicator', '60mm'));
+        }
+        return label;
+    }
+
+    async function openAssetDetailDrawer(id) {
+        const drawer = document.getElementById('global-detail-drawer');
+        if (!drawer) return;
+        drawer.replaceChildren(makeEl('p', 'text-muted', '加载资产详情...'));
+        drawer.classList.add('is-open');
+        try {
+            const data = await apiFetch(`/api/assets/${id}`);
+            renderDrawerContent(data);
+        } catch (err) {
+            drawer.replaceChildren(makeEl('p', 'error-text', err.message || '加载失败'));
+        }
+    }
+
+    function closeAssetDetailDrawer() {
+        const drawer = document.getElementById('global-detail-drawer');
+        if (drawer) drawer.classList.remove('is-open');
+    }
+
+    function renderDrawerContent(asset) {
+        const drawer = document.getElementById('global-detail-drawer');
+        if (!drawer) return;
+        const header = makeEl('div', 'drawer-header');
+        const titleWrap = makeEl('div');
+        titleWrap.appendChild(makeEl('span', 'drawer-eyebrow', asset.asset_tag));
+        titleWrap.appendChild(makeEl('h3', 'drawer-title', asset.name));
+        const close = makeEl('button', 'icon-button drawer-close');
+        close.type = 'button';
+        close.dataset.drawerClose = 'true';
+        close.setAttribute('aria-label', '关闭');
+        close.textContent = '×';
+        header.append(titleWrap, close);
+
+        const visual = makeEl('div', 'drawer-asset-visual');
+        visual.appendChild(makeEl('span', 'asset-visual-code', drawerCatIcons[asset.category] || 'IT'));
+
+        const toolbar = makeEl('div', 'drawer-toolbar');
+        const edit = makeEl('a', 'btn btn-secondary btn-sm', '编辑');
+        edit.href = `/assets/${asset.id}/edit`;
+        const action = makeEl('a', 'btn btn-primary btn-sm', asset.status === 'in_stock' ? '领用' : '操作');
+        action.href = `/assets/${asset.id}`;
+        const label = makeEl('a', 'btn btn-secondary btn-sm', '标签');
+        label.href = `/assets/${asset.id}/label`;
+        label.target = '_blank';
+        const del = makeEl('button', 'btn btn-danger btn-sm', '删除');
+        del.type = 'button';
+        del.dataset.drawerDelete = asset.id;
+        del.disabled = asset.status !== 'in_stock';
+        toolbar.append(edit, action, label, del);
+
+        const status = makeEl('span', `badge ${drawerStatusClasses[asset.status] || ''}`.trim(), drawerStatusLabels[asset.status] || asset.status);
+        const metaGrid = makeEl('div', 'drawer-meta-grid');
+        appendMetaItem(metaGrid, '类别', drawerCatLabels[asset.category] || asset.category);
+        appendMetaItem(metaGrid, '品牌', asset.brand);
+        appendMetaItem(metaGrid, '型号', asset.model);
+        appendMetaItem(metaGrid, '序列号', asset.serial_number);
+        appendMetaItem(metaGrid, '持有人', asset.holder_name);
+        appendMetaItem(metaGrid, '位置', asset.location);
+        appendMetaItem(metaGrid, '购入日期', asset.purchase_date);
+        appendMetaItem(metaGrid, '保修到期', asset.warranty_date);
+
+        const timelineSection = makeEl('section', 'drawer-section');
+        timelineSection.appendChild(makeEl('h4', '', '生命周期'));
+        const timeline = makeEl('div', 'vertical-timeline');
+        if (asset.events && asset.events.length) {
+            asset.events.forEach(event => timeline.appendChild(createTimelineNode(event)));
+        } else {
+            timeline.appendChild(makeEl('p', 'text-muted', '暂无生命周期事件'));
+        }
+        timelineSection.appendChild(timeline);
+
+        const labelSection = makeEl('section', 'drawer-section');
+        labelSection.appendChild(makeEl('h4', '', '标签预览'));
+        const logoValue = window.__assetLabelLogo || '';
+        if (logoValue) {
+            labelSection.appendChild(createPhysicalLabel(asset, `/api/assets/${asset.id}/qr`, {compact: true, logoUrl: logoValue}));
+        } else {
+            labelSection.appendChild(createPhysicalLabel(asset, `/api/assets/${asset.id}/qr`, {compact: true}));
+            apiFetch('/api/settings/logo').then(logoData => {
+                window.__assetLabelLogo = logoData.logo || '';
+                if (window.__assetLabelLogo) renderDrawerContent(asset);
+            }).catch(() => {});
+        }
+
+        drawer.replaceChildren(header, visual, toolbar, status, metaGrid, timelineSection, labelSection);
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        const navToggle = document.querySelector('[data-nav-toggle]');
+        if (navToggle) {
+            navToggle.addEventListener('click', () => {
+                const links = document.getElementById('navLinks');
+                if (links) links.classList.toggle('show');
+            });
+        }
+
+        const globalSearch = document.getElementById('global-search');
+        if (globalSearch) {
+            const params = new URLSearchParams(window.location.search);
+            globalSearch.value = params.get('search') || '';
+            globalSearch.addEventListener('keydown', event => {
+                if (event.key === 'Enter') {
+                    const query = globalSearch.value.trim();
+                    window.location.href = query ? `/assets?search=${encodeURIComponent(query)}` : '/assets';
+                }
+            });
+        }
+    });
+
+    document.addEventListener('click', async event => {
+        const logout = event.target.closest('[data-logout]');
+        if (logout) {
+            await fetch('/api/logout', {method: 'POST'});
+            location.href = '/login';
+            return;
+        }
+        if (event.target.closest('[data-drawer-close]')) {
+            closeAssetDetailDrawer();
+            return;
+        }
+        const deleteButton = event.target.closest('[data-drawer-delete]');
+        if (deleteButton && !deleteButton.disabled) {
+            const id = deleteButton.dataset.drawerDelete;
+            if (!confirm('确定删除这项库存资产吗？')) return;
+            await apiFetch(`/api/assets/${id}`, {method: 'DELETE'});
+            closeAssetDetailDrawer();
+            document.dispatchEvent(new CustomEvent('asset:changed'));
+        }
+    });
     </script>
     {% block scripts %}{% endblock %}
 </body>

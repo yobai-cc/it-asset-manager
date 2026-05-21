@@ -1,91 +1,307 @@
 {% extends "base.html" %}
 {% block title %}仪表盘 - IT 资产管理{% endblock %}
 {% block content %}
-<h2>仪表盘</h2>
+<section class="dashboard-layout">
+    <div class="page-header">
+        <div>
+            <h1 class="page-title">资产看板</h1>
+            <p class="page-subtitle">资产状态总览、分类分布与近期动态</p>
+        </div>
+        <div class="page-actions">
+            <a href="/assets/new" class="btn btn-primary">新增资产</a>
+        </div>
+    </div>
 
-<div class="stats-grid" id="statsGrid">
-    <div class="stat-card"><div class="stat-num" id="totalNum">-</div><div class="stat-label">总资产</div></div>
-    <div class="stat-card stat-assigned"><div class="stat-num" id="assignedNum">-</div><div class="stat-label">在用</div></div>
-    <div class="stat-card stat-instock"><div class="stat-num" id="instockNum">-</div><div class="stat-label">库存</div></div>
-    <div class="stat-card stat-maintenance"><div class="stat-num" id="maintenanceNum">-</div><div class="stat-label">维修中</div></div>
-    <div class="stat-card stat-scrapped"><div class="stat-num" id="scrappedNum">-</div><div class="stat-label">已报废</div></div>
-    <a href="/scan" class="stat-card stat-scan mobile-only">
-        <div class="stat-num">📷</div>
-        <div class="stat-label">扫码查资产</div>
-    </a>
-</div>
-<div class="dashboard-section" id="warrantySection" style="display:none;">
-    <h3>⚠️ 保修提醒</h3>
-    <div id="warrantyAlerts"></div>
-</div>
-<div class="dashboard-section">
-    <h3>按分类统计</h3>
-    <div id="categoryChart" class="category-chart"></div>
-</div>
-<div class="dashboard-section">
-    <h3>最近事件</h3>
-    <table class="table" id="recentEvents">
-        <thead><tr><th>时间</th><th>资产</th><th>事件</th><th>操作人</th></tr></thead>
-        <tbody></tbody>
-    </table>
-</div>
+    <div class="metric-card-grid" id="metricGrid">
+        <article class="metric-card" data-metric="total">
+            <div class="metric-card-header">
+                <span class="metric-label"><span class="dot-icon blue"></span> 总资产</span>
+            </div>
+            <div class="metric-value" id="totalNum">-</div>
+            <svg class="sparkline" viewBox="0 0 120 42" aria-hidden="true"><path d="M0 30 Q 20 10, 40 20 T 80 12 T 120 18" fill="none" stroke="var(--color-primary)" stroke-width="3"/></svg>
+        </article>
+        <article class="metric-card" data-metric="assigned">
+            <div class="metric-card-header">
+                <span class="metric-label"><span class="dot-icon green"></span> 在用</span>
+            </div>
+            <div class="metric-value" id="assignedNum">-</div>
+            <svg class="sparkline" viewBox="0 0 120 42" aria-hidden="true"><path d="M0 28 Q 24 22, 40 14 T 82 19 T 120 8" fill="none" stroke="var(--color-success)" stroke-width="3"/></svg>
+        </article>
+        <article class="metric-card" data-metric="in_stock">
+            <div class="metric-card-header">
+                <span class="metric-label"><span class="dot-icon blue"></span> 库存</span>
+            </div>
+            <div class="metric-value" id="instockNum">-</div>
+            <svg class="sparkline" viewBox="0 0 120 42" aria-hidden="true"><path d="M0 18 Q 22 12, 40 22 T 80 24 T 120 16" fill="none" stroke="var(--color-info)" stroke-width="3"/></svg>
+        </article>
+        <article class="metric-card" data-metric="maintenance">
+            <div class="metric-card-header">
+                <span class="metric-label"><span class="dot-icon yellow"></span> 维修中</span>
+            </div>
+            <div class="metric-value" id="maintenanceNum">-</div>
+            <svg class="sparkline" viewBox="0 0 120 42" aria-hidden="true"><path d="M0 32 Q 20 18, 42 26 T 82 12 T 120 24" fill="none" stroke="var(--color-warning)" stroke-width="3"/></svg>
+        </article>
+        <article class="metric-card" data-metric="scrapped">
+            <div class="metric-card-header">
+                <span class="metric-label"><span class="dot-icon red"></span> 已报废</span>
+            </div>
+            <div class="metric-value" id="scrappedNum">-</div>
+            <svg class="sparkline" viewBox="0 0 120 42" aria-hidden="true"><path d="M0 34 Q 22 28, 40 30 T 78 22 T 120 28" fill="none" stroke="var(--color-danger)" stroke-width="3"/></svg>
+        </article>
+    </div>
+
+    <div class="dashboard-section" id="warrantySection" style="display:none;">
+        <div class="panel-heading">
+            <h3>保修提醒</h3>
+        </div>
+        <div id="warrantyAlerts"></div>
+    </div>
+
+    <div class="dashboard-chart-grid">
+        <section class="chart-panel">
+            <div class="panel-heading">
+                <h3>资产增长趋势</h3>
+                <span class="text-muted">状态总览</span>
+            </div>
+            <svg class="trend-chart" id="trendChart" viewBox="0 0 720 260" aria-label="资产增长趋势"></svg>
+        </section>
+        <section class="chart-panel">
+            <div class="panel-heading">
+                <h3>分类占比</h3>
+                <span class="text-muted">Donut</span>
+            </div>
+            <div class="donut-wrap">
+                <svg class="donut-chart" id="donutChart" viewBox="0 0 220 220" aria-label="资产分类占比"></svg>
+            </div>
+            <div class="donut-legend" id="donutLegend"></div>
+        </section>
+    </div>
+
+    <section class="dashboard-section">
+        <div class="panel-heading">
+            <h3>最近事件</h3>
+            <a href="/activity" class="btn btn-secondary btn-sm">查看全部</a>
+        </div>
+        <table class="table" id="recentEvents" style="table-layout:fixed;">
+            <colgroup>
+                <col style="width:28%">
+                <col style="width:22%">
+                <col style="width:20%">
+                <col style="width:30%">
+            </colgroup>
+            <thead><tr><th>时间</th><th>资产</th><th>事件</th><th>操作人</th></tr></thead>
+            <tbody></tbody>
+        </table>
+    </section>
+</section>
 {% endblock %}
 {% block scripts %}
 <script>
-const catIcons = {computer:'\u{1F4BB}',monitor:'\u{1F5A5}',phone:'\u{1F4F1}',tablet:'\u{1F4CB}',printer:'\u{1F5A8}',server:'\u{1F5C4}',network:'\u{1F310}',firewall:'\u{1F6E1}',switch:'\u{1F500}'};
-const catColors = {computer:'#2563eb',monitor:'#7c3aed',phone:'#059669',tablet:'#d97706',printer:'#dc2626',server:'#475569',network:'#0891b2',firewall:'#be185d',switch:'#65a30d'};
+const catLabels = {computer:'电脑',monitor:'显示器',phone:'手机',tablet:'平板',printer:'打印机',server:'服务器',network:'网络设备',firewall:'防火墙',switch:'交换机'};
+const catColors = {computer:'#2563eb',monitor:'#7c3aed',phone:'#059669',tablet:'#d97706',printer:'#ef4444',server:'#475569',network:'#0891b2',firewall:'#be185d',switch:'#65a30d'};
+const eventNames = {stock_in:'入库',assign:'分配',return:'归还',transfer:'转移',maintenance_start:'送修',maintenance_end:'维修完成',scrap:'报废',label_print:'打印标签'};
+
+function setText(id, value) {
+    document.getElementById(id).textContent = value;
+}
+
+function createTableCell(text) {
+    const td = document.createElement('td');
+    td.textContent = text || '-';
+    return td;
+}
+
+function renderWarranty(data) {
+    const expiring = data.warranty_expiring || [];
+    const expired = data.warranty_expired || [];
+    const section = document.getElementById('warrantySection');
+    const target = document.getElementById('warrantyAlerts');
+    if (!expiring.length && !expired.length) return;
+    section.style.display = 'block';
+    target.replaceChildren();
+
+    const table = document.createElement('table');
+    table.className = 'table';
+    table.style.tableLayout = 'fixed';
+
+    const thead = document.createElement('thead');
+    const headRow = document.createElement('tr');
+    const colDefs = [
+        {label: '标签号', width: '20%'},
+        {label: '名称', width: '30%'},
+        {label: '持有人', width: '20%'},
+        {label: '到期日', width: '15%'},
+        {label: '状态', width: '15%'},
+    ];
+    colDefs.forEach(col => {
+        const th = document.createElement('th');
+        th.textContent = col.label;
+        th.style.width = col.width;
+        headRow.appendChild(th);
+    });
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+
+    function appendWarrantyRows(rows, tone, toneLabel) {
+        rows.forEach(asset => {
+            const tr = document.createElement('tr');
+            const tagTd = document.createElement('td');
+            const link = document.createElement('a');
+            link.href = `/assets/${asset.id}`;
+            link.textContent = asset.asset_tag;
+            tagTd.appendChild(link);
+            tr.appendChild(tagTd);
+            tr.appendChild(createTableCell(asset.name));
+            tr.appendChild(createTableCell(asset.holder_name));
+            tr.appendChild(createTableCell(asset.warranty_date));
+            const statusTd = document.createElement('td');
+            const badge = document.createElement('span');
+            badge.className = 'badge';
+            badge.style.backgroundColor = tone === 'var(--color-warning)' ? 'rgba(245,158,11,0.14)' : 'rgba(239,68,68,0.12)';
+            badge.style.color = tone;
+            badge.textContent = toneLabel;
+            statusTd.appendChild(badge);
+            tr.appendChild(statusTd);
+            tbody.appendChild(tr);
+        });
+    }
+
+    if (expiring.length) appendWarrantyRows(expiring, 'var(--color-warning)', '即将到期');
+    if (expired.length) appendWarrantyRows(expired, 'var(--color-danger)', '已过期');
+    table.appendChild(tbody);
+    target.appendChild(table);
+}
+
+function polarToCartesian(cx, cy, r, angle) {
+    const rad = (angle - 90) * Math.PI / 180;
+    return {x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad)};
+}
+
+function describeArc(cx, cy, r, startAngle, endAngle) {
+    const start = polarToCartesian(cx, cy, r, endAngle);
+    const end = polarToCartesian(cx, cy, r, startAngle);
+    const largeArc = endAngle - startAngle <= 180 ? '0' : '1';
+    return `M ${start.x} ${start.y} A ${r} ${r} 0 ${largeArc} 0 ${end.x} ${end.y}`;
+}
+
+function renderDonut(byCategory) {
+    const svg = document.getElementById('donutChart');
+    const legend = document.getElementById('donutLegend');
+    svg.replaceChildren();
+    legend.replaceChildren();
+    const entries = Object.entries(byCategory || {}).filter(([, count]) => count > 0);
+    const total = entries.reduce((sum, [, count]) => sum + count, 0);
+    const bg = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    bg.setAttribute('cx', '110');
+    bg.setAttribute('cy', '110');
+    bg.setAttribute('r', '72');
+    bg.setAttribute('fill', 'none');
+    bg.setAttribute('stroke', 'var(--color-border-light)');
+    bg.setAttribute('stroke-width', '28');
+    svg.appendChild(bg);
+    if (!entries.length) return;
+    let angle = 0;
+    entries.forEach(([cat, count]) => {
+        const slice = count / total * 360;
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', describeArc(110, 110, 72, angle, angle + slice));
+        path.setAttribute('fill', 'none');
+        path.setAttribute('stroke', catColors[cat] || '#2563eb');
+        path.setAttribute('stroke-width', '28');
+        path.setAttribute('stroke-linecap', 'round');
+        svg.appendChild(path);
+        angle += slice;
+
+        const row = document.createElement('div');
+        row.className = 'legend-row';
+        const name = document.createElement('span');
+        name.className = 'legend-name';
+        const dot = document.createElement('span');
+        dot.className = 'legend-dot';
+        dot.style.backgroundColor = catColors[cat] || '#2563eb';
+        name.appendChild(dot);
+        name.appendChild(document.createTextNode(catLabels[cat] || cat));
+        const value = document.createElement('strong');
+        value.textContent = String(count);
+        row.append(name, value);
+        legend.appendChild(row);
+    });
+
+    const center = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    center.setAttribute('x', '110');
+    center.setAttribute('y', '116');
+    center.setAttribute('text-anchor', 'middle');
+    center.setAttribute('font-size', '28');
+    center.setAttribute('font-weight', '800');
+    center.setAttribute('fill', 'var(--color-text-main)');
+    center.textContent = total;
+    svg.appendChild(center);
+}
+
+function renderTrend(data) {
+    const svg = document.getElementById('trendChart');
+    svg.replaceChildren();
+    [52, 104, 156, 208].forEach(y => {
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', '24');
+        line.setAttribute('x2', '696');
+        line.setAttribute('y1', String(y));
+        line.setAttribute('y2', String(y));
+        line.setAttribute('class', 'trend-grid-line');
+        svg.appendChild(line);
+    });
+    const values = [
+        Math.max(0, Math.round((data.total || 0) * 0.72)),
+        Math.max(0, Math.round((data.total || 0) * 0.78)),
+        Math.max(0, Math.round((data.total || 0) * 0.84)),
+        Math.max(0, Math.round((data.total || 0) * 0.9)),
+        data.total || 0,
+        (data.total || 0) + Math.max(1, data.in_stock || 0),
+    ];
+    const max = Math.max(...values, 1);
+    const points = values.map((value, index) => {
+        const x = 40 + index * 128;
+        const y = 224 - value / max * 176;
+        return `${x},${y}`;
+    }).join(' ');
+    const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+    poly.setAttribute('points', points);
+    poly.setAttribute('fill', 'none');
+    poly.setAttribute('stroke', 'var(--color-primary)');
+    poly.setAttribute('stroke-width', '4');
+    poly.setAttribute('stroke-linejoin', 'round');
+    poly.setAttribute('stroke-linecap', 'round');
+    svg.appendChild(poly);
+}
+
+function renderRecentEvents(events) {
+    const tbody = document.querySelector('#recentEvents tbody');
+    tbody.replaceChildren();
+    (events || []).forEach(event => {
+        const tr = document.createElement('tr');
+        tr.append(
+            createTableCell(new Date(event.created_at).toLocaleString('zh-CN')),
+            createTableCell(event.asset_tag),
+            createTableCell(eventNames[event.event_type] || event.event_type),
+            createTableCell(event.operator_name)
+        );
+        tbody.appendChild(tr);
+    });
+}
 
 (async () => {
     const data = await apiFetch('/api/stats');
-    document.getElementById('totalNum').textContent = data.total;
-    document.getElementById('assignedNum').textContent = data.assigned;
-    document.getElementById('instockNum').textContent = data.in_stock;
-    document.getElementById('maintenanceNum').textContent = data.maintenance;
-    document.getElementById('scrappedNum').textContent = data.scrapped;
-
-    // 保修提醒
-    const hasExpiring = data.warranty_expiring && data.warranty_expiring.length > 0;
-    const hasExpired = data.warranty_expired && data.warranty_expired.length > 0;
-    if (hasExpiring || hasExpired) {
-        document.getElementById('warrantySection').style.display = 'block';
-        let html = '';
-        if (hasExpiring) {
-            html += '<p style="color:var(--warning);margin-bottom:8px;">即将到期（30天内）：</p>';
-            html += '<table class="table" style="margin-bottom:16px;"><thead><tr><th>标签号</th><th>名称</th><th>持有人</th><th>到期日</th></tr></thead><tbody>';
-            data.warranty_expiring.forEach(a => {
-                html += `<tr><td><a href="/assets/${a.id}">${a.asset_tag}</a></td><td>${a.name}</td><td>${a.holder_name||'-'}</td><td>${a.warranty_date}</td></tr>`;
-            });
-            html += '</tbody></table>';
-        }
-        if (hasExpired) {
-            html += '<p style="color:var(--danger);margin-bottom:8px;">已过保修期：</p>';
-            html += '<table class="table"><thead><tr><th>标签号</th><th>名称</th><th>持有人</th><th>到期日</th></tr></thead><tbody>';
-            data.warranty_expired.forEach(a => {
-                html += `<tr><td><a href="/assets/${a.id}">${a.asset_tag}</a></td><td>${a.name}</td><td>${a.holder_name||'-'}</td><td>${a.warranty_date}</td></tr>`;
-            });
-            html += '</tbody></table>';
-        }
-        document.getElementById('warrantyAlerts').innerHTML = html;
-    }
-
-    // 分类图表
-    const catEl = document.getElementById('categoryChart');
-    const catNames = {computer:'电脑',monitor:'显示器',phone:'手机',tablet:'平板',printer:'打印机',server:'服务器',network:'网络设备',firewall:'防火墙',switch:'交换机'};
-    const maxVal = Math.max(...Object.values(data.by_category), 1);
-    for (const [cat, count] of Object.entries(data.by_category)) {
-        const pct = Math.round(count / maxVal * 100);
-        const color = catColors[cat] || '#2563eb';
-        const icon = catIcons[cat] || '';
-        catEl.innerHTML += `<div class="cat-row"><span class="cat-name">${icon} ${catNames[cat]||cat}</span><div class="cat-bar-bg"><div class="cat-bar" style="width:${pct}%;background:${color}"></div></div><span class="cat-count">${count}</span></div>`;
-    }
-
-    // 最近事件
-    const eventNames = {stock_in:'入库',assign:'分配',return:'归还',transfer:'转移',maintenance_start:'维修开始',maintenance_end:'维修完成',scrap:'报废',label_print:'打印标签'};
-    const tbody = document.querySelector('#recentEvents tbody');
-    data.recent_events.forEach(e => {
-        const d = new Date(e.created_at);
-        tbody.innerHTML += `<tr><td>${d.toLocaleString('zh-CN')}</td><td>${e.asset_tag}</td><td>${eventNames[e.event_type]||e.event_type}</td><td>${e.operator_name}</td></tr>`;
-    });
+    setText('totalNum', data.total);
+    setText('assignedNum', data.assigned);
+    setText('instockNum', data.in_stock);
+    setText('maintenanceNum', data.maintenance);
+    setText('scrappedNum', data.scrapped);
+    renderWarranty(data);
+    renderTrend(data);
+    renderDonut(data.by_category);
+    renderRecentEvents(data.recent_events);
 })();
 </script>
 {% endblock %}

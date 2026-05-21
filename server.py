@@ -1111,7 +1111,7 @@ def api_logo_upload():
     ext = _os.path.splitext(f.filename)[1].lower()
     if ext not in allowed:
         return jsonify({"error": f"不支持的格式 {ext}，仅支持 {', '.join(allowed)}"}), 400
-    save_dir = _os.path.join(_os.path.dirname(_os.abspath(__file__)), "static", "uploads")
+    save_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "static", "uploads")
     _os.makedirs(save_dir, exist_ok=True)
     save_path = _os.path.join(save_dir, "company_logo" + ext)
     f.save(save_path)

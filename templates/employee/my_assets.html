@@ -1,52 +1,84 @@
 {% extends "base.html" %}
 {% block title %}我的资产 - IT 资产管理{% endblock %}
 {% block content %}
-<h2>我的资产</h2>
+<section class="mobile-assets-shell">
+    <header class="mobile-header">
+        <a href="/" class="icon-button" aria-label="返回">‹</a>
+        <h1 class="mobile-header-title">My Assets</h1>
+        <a href="/my/applications" class="icon-button" aria-label="信息">i</a>
+    </header>
 
-<div class="stats-grid" style="margin-bottom:20px;">
-    <a href="/scan" class="stat-card stat-scan mobile-only">
-        <div class="stat-num">📷</div>
-        <div class="stat-label">扫码查资产</div>
-    </a>
-</div>
+    <div class="mobile-search-row">
+        <input type="text" id="searchInput" placeholder="搜索资产..." class="input">
+        <button class="btn btn-secondary" type="button" onclick="loadMyAssets()">搜索</button>
+    </div>
 
-<div class="filter-bar">
-    <input type="text" id="searchInput" placeholder="搜索资产..." class="input" onkeydown="if(event.key==='Enter')loadMyAssets()">
-    <button class="btn btn-secondary" onclick="loadMyAssets()">搜索</button>
-</div>
-<div id="myAssetsList"></div>
+    <div id="myAssetsList"></div>
+    <a href="/scan" class="scan-fab" aria-label="扫码查资产"><span class="icon-scan"></span></a>
+</section>
 {% endblock %}
 {% block scripts %}
 <script>
 const statusLabels = {in_stock:'库存',assigned:'在用',maintenance:'维修中',scrapped:'已报废'};
 const statusClasses = {in_stock:'badge-instock',assigned:'badge-assigned',maintenance:'badge-maintenance',scrapped:'badge-scrapped'};
 const catLabels = {computer:'电脑',monitor:'显示器',phone:'手机',tablet:'平板',printer:'打印机',server:'服务器',network:'网络设备',firewall:'防火墙',switch:'交换机'};
-const catIcons = {computer:'\u{1F4BB}',monitor:'\u{1F5A5}',phone:'\u{1F4F1}',tablet:'\u{1F4CB}',printer:'\u{1F5A8}',server:'\u{1F5C4}',network:'\u{1F310}',firewall:'\u{1F6E1}',switch:'\u{1F500}'};
+const catColors = {computer:'#2563eb',monitor:'#7c3aed',phone:'#059669',tablet:'#d97706',printer:'#ef4444',server:'#475569',network:'#0891b2',firewall:'#be185d',switch:'#65a30d'};
+
+function makeText(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    node.textContent = text || '-';
+    return node;
+}
+
+function createAssetCard(asset) {
+    const link = document.createElement('a');
+    link.href = `/my/assets/${asset.id}`;
+    link.className = 'asset-card-link';
+
+    const card = document.createElement('article');
+    card.className = 'asset-card-mobile';
+    card.style.setProperty('--asset-color', catColors[asset.category] || '#2563eb');
+
+    card.appendChild(makeText('div', 'asset-card-tag', asset.asset_tag));
+    card.appendChild(makeText('div', 'asset-card-name', asset.name));
+    card.appendChild(makeText('div', 'asset-card-meta', `${catLabels[asset.category] || asset.category} · ${asset.location || '未知位置'}`));
+
+    const footer = document.createElement('div');
+    footer.className = 'asset-card-mobile-footer';
+    const status = document.createElement('span');
+    status.className = `badge ${statusClasses[asset.status] || ''}`.trim();
+    status.textContent = statusLabels[asset.status] || asset.status;
+    footer.appendChild(status);
+    footer.appendChild(makeText('span', 'text-muted', asset.brand || asset.model || ''));
+    card.appendChild(footer);
+
+    link.appendChild(card);
+    return link;
+}
 
 async function loadMyAssets() {
-    const search = document.getElementById('searchInput').value;
+    const search = document.getElementById('searchInput').value.trim();
     let url = '/api/my/assets';
     if (search) url += `?search=${encodeURIComponent(search)}`;
     const data = await apiFetch(url);
-    const el = document.getElementById('myAssetsList');
+    const target = document.getElementById('myAssetsList');
+    target.replaceChildren();
     if (!data.assets.length) {
-        el.innerHTML = '<p class="text-muted">暂无名下资产</p>';
+        target.appendChild(makeText('p', 'text-muted', '暂无名下资产'));
         return;
     }
-    let html = '<div class="asset-cards">';
-    data.assets.forEach(a => {
-        html += `<a href="/my/assets/${a.id}" class="asset-card-link">
-            <div class="asset-card">
-                <div class="asset-card-tag">${catIcons[a.category]||''} ${a.asset_tag}</div>
-                <div class="asset-card-name">${a.name}</div>
-                <div class="asset-card-meta">${catLabels[a.category]||a.category} · ${a.location||'未知位置'}</div>
-            </div>
-        </a>`;
-    });
-    html += '</div>';
-    el.innerHTML = html;
+    const grid = document.createElement('div');
+    grid.className = 'asset-cards';
+    data.assets.forEach(asset => grid.appendChild(createAssetCard(asset)));
+    target.appendChild(grid);
 }
 
-loadMyAssets();
+document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('searchInput').addEventListener('keydown', event => {
+        if (event.key === 'Enter') loadMyAssets();
+    });
+    loadMyAssets();
+});
 </script>
 {% endblock %}

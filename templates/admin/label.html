@@ -5,115 +5,178 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>资产标签</title>
     <style>
+    :root {
+        --color-primary: #2563eb;
+        --color-bg-card: #ffffff;
+        --color-text-main: #0f172a;
+        --color-text-muted: #64748b;
+        --color-border: #e2e8f0;
+        --space-1: 8px;
+        --space-4: 32px;
+        --space-6: 48px;
+        --radius-soft: 4px;
+        --radius-medium: 8px;
+    }
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #f5f5f5; font-family: sans-serif; padding: 20px; }
-    .no-print { margin-bottom: 20px; }
-    .label-card {
-        width: 60mm; height: 40mm;
-        border: 1px solid #ccc;
-        padding: 2mm 3mm;
-        display: inline-flex;
-        flex-direction: row;
+    body { background: #f8fafc; font-family: sans-serif; padding: 24px; color: var(--color-text-main); }
+    .no-print { margin-bottom: 24px; display: flex; gap: 8px; }
+    .print-button {
+        min-height: 40px;
+        padding: 0 16px;
+        border-radius: var(--radius-medium);
+        border: 1px solid var(--color-border);
+        background: var(--color-bg-card);
+        cursor: pointer;
+        font-weight: 700;
+    }
+    .print-button.primary { background: var(--color-primary); border-color: var(--color-primary); color: #fff; }
+    .physical-label-preview {
+        width: 60mm;
+        height: 40mm;
+        border: 1px dashed var(--color-text-muted);
+        border-radius: var(--radius-soft);
+        padding: 3mm;
+        box-sizing: border-box;
+        position: relative;
+        background-color: #fff;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        color: var(--color-text-main);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        line-height: 1.2;
+    }
+    .label-header { display: flex; align-items: center; gap: var(--space-1); min-width: 0; }
+    .label-logo-placeholder {
+        width: var(--space-4);
+        height: var(--space-4);
+        border-radius: var(--radius-soft);
+        border: 1px solid var(--color-border);
+        display: flex;
         align-items: center;
-        background: white;
-        margin: 3mm;
-        page-break-inside: avoid;
-        overflow: hidden;
-    }
-    .label-left {
-        flex: 1;
-        min-width: 0;
-        overflow: hidden;
-    }
-    .label-logo {
-        height: 5mm;
-        margin-bottom: 1mm;
-        object-fit: contain;
-    }
-    .label-asset-tag {
-        font-size: 10pt;
-        font-weight: bold;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-    .label-field {
-        font-size: 6pt;
-        line-height: 1.3;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        color: #333;
-    }
-    .label-right {
+        justify-content: center;
+        font-size: 10px;
+        font-weight: 800;
+        color: var(--color-primary);
         flex-shrink: 0;
-        margin-left: 2mm;
+        overflow: hidden;
     }
-    .label-qr { width: 20mm; height: 20mm; }
+    .label-logo-placeholder img { width: 100%; height: 100%; object-fit: contain; }
+    .label-meta-tags { min-width: 0; }
+    .label-title-text {
+        font-size: 12px;
+        font-weight: 800;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .label-tag-sn {
+        font-size: 9px;
+        color: var(--color-text-muted);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .label-footer-zone { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-1); }
+    .numeric-tag-id { font-size: 18px; font-weight: 900; letter-spacing: 0; }
+    .qr-code-wrapper {
+        width: var(--space-6);
+        height: var(--space-6);
+        border: 1px solid var(--color-border);
+        padding: 2px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+    .qr-image { width: 100%; height: 100%; object-fit: contain; }
+    .dim-indicator {
+        position: absolute;
+        color: var(--color-text-muted);
+        font-size: 10px;
+        font-weight: 700;
+        background-color: #fff;
+        padding: 0 4px;
+    }
+    .height-indicator { right: -28px; top: 50%; transform: translateY(-50%) rotate(90deg); }
+    .width-indicator { left: 50%; bottom: -18px; transform: translateX(-50%); }
     @media print {
+        body * { visibility: hidden !important; }
+        #labelContent, #labelContent * { visibility: visible !important; }
+        #labelContent { position: absolute; left: 0; top: 0; }
+        .dim-indicator { display: none !important; }
+        body { background: #fff; padding: 0; margin: 0; }
+        .physical-label-preview { border: 1px solid #000; }
         .no-print { display: none !important; }
-        body { background: white; padding: 0; margin: 0; }
-        .label-card { border: 1px solid #000; margin: 0; }
+        @page { size: 60mm 40mm; margin: 0; }
     }
     </style>
 </head>
 <body>
     <div class="no-print">
-        <button onclick="window.print()" style="padding:10px 20px;font-size:16px;">打印标签</button>
-        <button onclick="window.close()" style="padding:10px 20px;font-size:16px;margin-left:10px;">关闭</button>
+        <button class="print-button primary" type="button" onclick="window.print()">打印标签</button>
+        <button class="print-button" type="button" onclick="window.close()">关闭</button>
     </div>
     <div id="labelContent"></div>
     <script>
     const assetId = {{ asset_id }};
     const labelFieldLabels = {name:'名称',serial_number:'序列号',holder:'持有人',location:'位置',brand:'品牌',model:'型号'};
+
+    function makeEl(tag, className, text) {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined && text !== null) node.textContent = text;
+        return node;
+    }
+
+    function createLabel(asset, fields, logoUrl) {
+        const label = makeEl('div', 'physical-label-preview');
+        const header = makeEl('div', 'label-header');
+        const logo = makeEl('div', 'label-logo-placeholder');
+        if (logoUrl) {
+            const img = document.createElement('img');
+            img.src = logoUrl;
+            img.alt = 'Logo';
+            logo.appendChild(img);
+        } else {
+            logo.textContent = 'IT';
+        }
+
+        const meta = makeEl('div', 'label-meta-tags');
+        meta.appendChild(makeEl('div', 'label-title-text', asset.name || '-'));
+        meta.appendChild(makeEl('div', 'label-tag-sn', asset.asset_tag || '-'));
+        if (asset.serial_number) meta.appendChild(makeEl('div', 'label-tag-sn', 'SN: ' + asset.serial_number));
+        fields.forEach(field => {
+            if (field === 'name' || field === 'serial_number') return;
+            const value = field === 'holder' ? asset.holder_name : asset[field];
+            if (!value) return;
+            meta.appendChild(makeEl('div', 'label-tag-sn', `${labelFieldLabels[field] || field}: ${value}`));
+        });
+        header.append(logo, meta);
+
+        const footer = makeEl('div', 'label-footer-zone');
+        const numeric = String(asset.asset_tag || asset.id || '').replace(/\D/g, '').slice(-7) || String(asset.id || '-');
+        footer.appendChild(makeEl('div', 'numeric-tag-id', numeric));
+        const qrWrap = makeEl('div', 'qr-code-wrapper');
+        const qr = document.createElement('img');
+        qr.src = `/api/assets/${assetId}/qr`;
+        qr.alt = 'QR';
+        qr.className = 'qr-image';
+        qrWrap.appendChild(qr);
+        footer.appendChild(qrWrap);
+
+        label.append(header, footer);
+        label.appendChild(makeEl('div', 'dim-indicator height-indicator', '40mm'));
+        label.appendChild(makeEl('div', 'dim-indicator width-indicator', '60mm'));
+        return label;
+    }
+
     Promise.all([
         fetch(`/api/assets/${assetId}`).then(r => r.json()),
         fetch('/api/settings/label').then(r => r.json()),
         fetch('/api/settings/logo').then(r => r.json()),
-    ]).then(([data, settings, logoData]) => {
-        const fields = settings.fields || ['name'];
-        const logoUrl = logoData.logo || '';
-
-        const card = document.createElement('div');
-        card.className = 'label-card';
-
-        const left = document.createElement('div');
-        left.className = 'label-left';
-
-        if (logoUrl) {
-            const logo = document.createElement('img');
-            logo.src = logoUrl;
-            logo.className = 'label-logo';
-            logo.alt = 'Logo';
-            left.appendChild(logo);
-        }
-
-        const tag = document.createElement('div');
-        tag.className = 'label-asset-tag';
-        tag.textContent = data.asset_tag;
-        left.appendChild(tag);
-
-        fields.forEach(f => {
-            const val = f === 'holder' ? (data.holder_name || '') : (data[f] || '');
-            if (val) {
-                const field = document.createElement('div');
-                field.className = 'label-field';
-                field.textContent = val;
-                left.appendChild(field);
-            }
-        });
-
-        const right = document.createElement('div');
-        right.className = 'label-right';
-        const qr = document.createElement('img');
-        qr.src = `/api/assets/${assetId}/qr`;
-        qr.className = 'label-qr';
-        qr.alt = 'QR';
-        right.appendChild(qr);
-
-        card.appendChild(left);
-        card.appendChild(right);
-        document.getElementById('labelContent').replaceChildren(card);
+    ]).then(([asset, settings, logoData]) => {
+        document.getElementById('labelContent').replaceChildren(createLabel(asset, settings.fields || ['name'], logoData.logo || ''));
     });
     </script>
 </body>

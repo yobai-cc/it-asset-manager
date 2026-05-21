@@ -680,6 +680,31 @@ class TestLabelAndQR:
         assert res.status_code == 400
         assert "不存在" in res.get_json()["error"]
 
+    def test_logo_upload_saves_file_and_config(self, app_client, db):
+        """企业 Logo 上传后应保存文件，并在标签相关接口中返回可访问路径。"""
+        import io
+
+        seed_test_data(db)
+        login_admin(app_client)
+        payload = {"file": (io.BytesIO(b"fake-png-data"), "logo.png")}
+        logo = None
+        try:
+            res = app_client.post("/api/settings/logo", data=payload, content_type="multipart/form-data")
+            assert res.status_code == 200
+            logo = res.get_json()["logo"]
+            assert logo == "/static/uploads/company_logo.png"
+            assert db.get_config("company_logo") == logo
+
+            get_res = app_client.get("/api/settings/logo")
+            assert get_res.status_code == 200
+            assert get_res.get_json()["logo"] == logo
+        finally:
+            if logo:
+                root = os.path.dirname(os.path.dirname(__file__))
+                saved = os.path.join(root, logo.lstrip("/"))
+                if os.path.exists(saved):
+                    os.unlink(saved)
+
     def test_qr_nonexistent_asset(self, app_client, db):
         seed_test_data(db)
         login_admin(app_client)

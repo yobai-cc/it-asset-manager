@@ -109,89 +109,135 @@ const catLabels = {computer:'电脑',monitor:'显示器',phone:'手机',tablet:'
 const catIcons = {computer:'\u{1F4BB}',monitor:'\u{1F5A5}',phone:'\u{1F4F1}',tablet:'\u{1F4CB}',printer:'\u{1F5A8}',server:'\u{1F5C4}',network:'\u{1F310}',firewall:'\u{1F6E1}',switch:'\u{1F500}'};
 const eventNames = {stock_in:'入库',assign:'分配',return:'归还',transfer:'转移',maintenance_start:'送修',maintenance_end:'维修完成',scrap:'报废',label_print:'打印标签'};
 
+function makeEl(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined && text !== null) node.textContent = text;
+    return node;
+}
+
+function makeDetailRow(label, valueNode) {
+    const tr = document.createElement('tr');
+    const th = makeEl('th', '', label);
+    const td = document.createElement('td');
+    if (typeof valueNode === 'string' || valueNode === undefined || valueNode === null) {
+        td.textContent = valueNode || '-';
+    } else {
+        td.appendChild(valueNode);
+    }
+    tr.append(th, td);
+    return tr;
+}
+
 async function loadDetail() {
     const data = await apiFetch(`/api/assets/${assetId}`);
     const el = document.getElementById('assetDetail');
-    let btns = '';
-    if (data.status === 'in_stock') {
-        btns += `<button class="btn btn-primary" onclick="openModal('assignModal')">分配</button>`;
+    el.replaceChildren();
+
+    const header = makeEl('div', 'detail-header');
+    header.appendChild(makeEl('h2', '', `${data.asset_tag} - ${data.name}`));
+    const statusBadge = makeEl('span', `badge ${statusClasses[data.status] || ''}`, statusLabels[data.status] || data.status);
+    header.appendChild(statusBadge);
+
+    const actions = makeEl('div', 'detail-actions');
+    function addActionBtn(label, cls, onclick) {
+        const btn = makeEl('button', `btn ${cls}`, label);
+        btn.type = 'button';
+        btn.addEventListener('click', onclick);
+        actions.appendChild(btn);
     }
+    function addActionLink(label, cls, href, target) {
+        const a = makeEl('a', `btn ${cls}`, label);
+        a.href = href;
+        if (target) a.target = target;
+        actions.appendChild(a);
+    }
+    if (data.status === 'in_stock') addActionBtn('分配', 'btn-primary', () => openModal('assignModal'));
     if (data.status === 'assigned') {
-        btns += `<button class="btn btn-secondary" onclick="openModal('returnModal')">归还</button>`;
-        btns += `<button class="btn btn-secondary" onclick="openModal('transferModal')">转移</button>`;
-        btns += `<button class="btn btn-warning" onclick="openModal('maintenanceModal')">送修</button>`;
+        addActionBtn('归还', 'btn-secondary', () => openModal('returnModal'));
+        addActionBtn('转移', 'btn-secondary', () => openModal('transferModal'));
+        addActionBtn('送修', 'btn-warning', () => openModal('maintenanceModal'));
     }
-    if (data.status === 'maintenance') {
-        btns += `<button class="btn btn-primary" onclick="openResolveModal()">维修完成</button>`;
-    }
-    if (data.status !== 'scrapped') {
-        btns += `<button class="btn btn-danger" onclick="openModal('scrapModal')">报废</button>`;
-    }
-    btns += `<a href="/assets/${assetId}/label" class="btn btn-secondary" target="_blank">打印标签</a>`;
-    btns += `<a href="/assets/${assetId}/edit" class="btn btn-secondary">编辑</a>`;
+    if (data.status === 'maintenance') addActionBtn('维修完成', 'btn-primary', () => openResolveModal());
+    if (data.status !== 'scrapped') addActionBtn('报废', 'btn-danger', () => openModal('scrapModal'));
+    addActionLink('打印标签', 'btn-secondary', `/assets/${assetId}/label`, '_blank');
+    addActionLink('编辑', 'btn-secondary', `/assets/${assetId}/edit`);
 
-    let eventsHtml = '';
+    const infoSection = makeEl('div', 'detail-section');
+    infoSection.appendChild(makeEl('h3', '', '基本信息'));
+    const infoTable = makeEl('table', 'detail-table');
+    const categoryTd = document.createElement('td');
+    categoryTd.textContent = `${catIcons[data.category]||''} ${catLabels[data.category]||data.category}`;
+    infoTable.appendChild(makeDetailRow('类别', null)).querySelector('td').replaceWith(categoryTd);
+    infoTable.appendChild(makeDetailRow('品牌', data.brand));
+    infoTable.appendChild(makeDetailRow('型号', data.model));
+    infoTable.appendChild(makeDetailRow('序列号', data.serial_number));
+    infoTable.appendChild(makeDetailRow('持有人', data.holder_name));
+    infoTable.appendChild(makeDetailRow('位置', data.location));
+    infoTable.appendChild(makeDetailRow('购入日期', data.purchase_date));
+    infoTable.appendChild(makeDetailRow('购入价格', data.purchase_price ? '¥' + data.purchase_price : '-'));
+    if (data.warranty_date) {
+        const warrantyTd = document.createElement('td');
+        if (new Date(data.warranty_date) < new Date()) {
+            const expiredBadge = makeEl('span', 'badge badge-scrapped', '已过期');
+            warrantyTd.append(expiredBadge, ' ');
+        }
+        warrantyTd.appendChild(document.createTextNode(data.warranty_date));
+        const warrantyRow = makeDetailRow('保修到期', null);
+        warrantyRow.querySelector('td').replaceWith(warrantyTd);
+        infoTable.appendChild(warrantyRow);
+    } else {
+        infoTable.appendChild(makeDetailRow('保修到期', '-'));
+    }
+    infoTable.appendChild(makeDetailRow('备注', data.notes));
+    infoSection.appendChild(infoTable);
+
+    const timelineSection = makeEl('div', 'detail-section');
+    timelineSection.appendChild(makeEl('h3', '', '生命周期时间线'));
     if (data.events && data.events.length) {
-        eventsHtml = '<div class="timeline">';
+        const timeline = makeEl('div', 'timeline');
         data.events.forEach(e => {
-            const d = new Date(e.created_at);
-            eventsHtml += `<div class="timeline-item">
-                <div class="timeline-dot"></div>
-                <div class="timeline-content">
-                    <div class="timeline-title">${eventNames[e.event_type]||e.event_type}</div>
-                    <div class="timeline-meta">${d.toLocaleString('zh-CN')} · ${e.operator_name||''} ${e.notes ? '· '+e.notes : ''}</div>
-                </div>
-            </div>`;
+            const item = makeEl('div', 'timeline-item');
+            item.appendChild(makeEl('div', 'timeline-dot'));
+            const content = makeEl('div', 'timeline-content');
+            content.appendChild(makeEl('div', 'timeline-title', eventNames[e.event_type] || e.event_type));
+            const parts = [new Date(e.created_at).toLocaleString('zh-CN'), e.operator_name || '', e.notes || ''].filter(Boolean);
+            content.appendChild(makeEl('div', 'timeline-meta', parts.join(' · ')));
+            item.appendChild(content);
+            timeline.appendChild(item);
         });
-        eventsHtml += '</div>';
+        timelineSection.appendChild(timeline);
     } else {
-        eventsHtml = '<p class="text-muted">暂无生命周期事件</p>';
+        timelineSection.appendChild(makeEl('p', 'text-muted', '暂无生命周期事件'));
     }
 
-    let maintHtml = '';
+    const maintSection = makeEl('div', 'detail-section');
+    maintSection.appendChild(makeEl('h3', '', '维修记录'));
+    const maintStatusMap = {pending:'待处理', in_progress:'进行中', resolved:'已完成'};
     if (data.maintenance_records && data.maintenance_records.length) {
-        maintHtml = '<table class="table"><thead><tr><th>日期</th><th>描述</th><th>状态</th><th>费用</th><th>备注</th></tr></thead><tbody>';
+        const maintTable = makeEl('table', 'table');
+        const thead = document.createElement('thead');
+        const headRow = document.createElement('tr');
+        ['日期','描述','状态','费用','备注'].forEach(t => headRow.appendChild(makeEl('th','',t)));
+        thead.appendChild(headRow);
+        maintTable.appendChild(thead);
+        const tbody = document.createElement('tbody');
         data.maintenance_records.forEach(m => {
-            const ms = {pending:'待处理',in_progress:'进行中',resolved:'已完成'};
-            maintHtml += `<tr><td>${new Date(m.created_at).toLocaleDateString('zh-CN')}</td><td>${m.description}</td><td>${ms[m.status]||m.status}</td><td>${m.cost||'-'}</td><td>${m.repair_notes||'-'}</td></tr>`;
+            const tr = document.createElement('tr');
+            tr.appendChild(makeEl('td', '', new Date(m.created_at).toLocaleDateString('zh-CN')));
+            tr.appendChild(makeEl('td', '', m.description));
+            tr.appendChild(makeEl('td', '', maintStatusMap[m.status] || m.status));
+            tr.appendChild(makeEl('td', '', m.cost || '-'));
+            tr.appendChild(makeEl('td', '', m.repair_notes || '-'));
+            tbody.appendChild(tr);
         });
-        maintHtml += '</tbody></table>';
+        maintTable.appendChild(tbody);
+        maintSection.appendChild(maintTable);
     } else {
-        maintHtml = '<p class="text-muted">暂无维修记录</p>';
+        maintSection.appendChild(makeEl('p', 'text-muted', '暂无维修记录'));
     }
 
-    el.innerHTML = `
-        <div class="detail-header">
-            <h2>${data.asset_tag} - ${data.name}</h2>
-            <span class="badge ${statusClasses[data.status]}">${statusLabels[data.status]}</span>
-        </div>
-        <div class="detail-actions">${btns}</div>
-        <div class="detail-grid">
-            <div class="detail-section">
-                <h3>基本信息</h3>
-                <table class="detail-table">
-                    <tr><th>类别</th><td>${catIcons[data.category]||''} ${catLabels[data.category]||data.category}</td></tr>
-                    <tr><th>品牌</th><td>${data.brand||'-'}</td></tr>
-                    <tr><th>型号</th><td>${data.model||'-'}</td></tr>
-                    <tr><th>序列号</th><td>${data.serial_number||'-'}</td></tr>
-                    <tr><th>持有人</th><td>${data.holder_name||'-'}</td></tr>
-                    <tr><th>位置</th><td>${data.location||'-'}</td></tr>
-                    <tr><th>购入日期</th><td>${data.purchase_date||'-'}</td></tr>
-                    <tr><th>购入价格</th><td>${data.purchase_price?'¥'+data.purchase_price:'-'}</td></tr>
-                    <tr><th>保修到期</th><td>${data.warranty_date ? (new Date(data.warranty_date) < new Date() ? '<span class="badge badge-scrapped">已过期</span> ' : '') + data.warranty_date : '-'}</td></tr>
-                    <tr><th>备注</th><td>${data.notes||'-'}</td></tr>
-                </table>
-            </div>
-        </div>
-        <div class="detail-section">
-            <h3>生命周期时间线</h3>
-            ${eventsHtml}
-        </div>
-        <div class="detail-section">
-            <h3>维修记录</h3>
-            ${maintHtml}
-        </div>
-    `;
+    el.append(header, actions, infoSection, timelineSection, maintSection);
 
     // 加载用户列表用于分配/转移
     const usersRes = await apiFetch('/api/stats');
