@@ -2,7 +2,7 @@
 {% block title %}资产详情 - IT 资产管理{% endblock %}
 {% block content %}
 <div id="assetDetail">
-    <p>加载中...</p>
+    <div class="detail-empty-state"><div class="detail-empty-icon">⏳</div><p>加载中...</p></div>
 </div>
 
 <!-- 分配对话框 -->
@@ -17,8 +17,10 @@
             <label>备注</label>
             <input type="text" id="assignNotes" class="input">
         </div>
-        <button class="btn btn-primary" onclick="doAssign()">确认分配</button>
-        <button class="btn btn-secondary" onclick="closeModal('assignModal')">取消</button>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
+            <button class="btn btn-secondary" data-close-modal="assignModal">取消</button>
+            <button class="btn btn-primary" id="btnDoAssign">确认分配</button>
+        </div>
     </div>
 </div>
 
@@ -34,8 +36,10 @@
             <label>备注</label>
             <input type="text" id="transferNotes" class="input">
         </div>
-        <button class="btn btn-primary" onclick="doTransfer()">确认转移</button>
-        <button class="btn btn-secondary" onclick="closeModal('transferModal')">取消</button>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
+            <button class="btn btn-secondary" data-close-modal="transferModal">取消</button>
+            <button class="btn btn-primary" id="btnDoTransfer">确认转移</button>
+        </div>
     </div>
 </div>
 
@@ -47,8 +51,10 @@
             <label>故障描述 *</label>
             <textarea id="maintenanceDesc" class="input" rows="3"></textarea>
         </div>
-        <button class="btn btn-primary" onclick="doMaintenance()">确认送修</button>
-        <button class="btn btn-secondary" onclick="closeModal('maintenanceModal')">取消</button>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
+            <button class="btn btn-secondary" data-close-modal="maintenanceModal">取消</button>
+            <button class="btn btn-primary" id="btnDoMaintenance">确认送修</button>
+        </div>
     </div>
 </div>
 
@@ -56,13 +62,15 @@
 <div id="scrapModal" class="modal" style="display:none;">
     <div class="modal-content">
         <h3>报废资产</h3>
-        <p>确定要报废此资产吗？此操作不可逆。</p>
+        <p style="margin-bottom:12px;color:var(--color-text-muted);">确定要报废此资产吗？此操作不可逆。</p>
         <div class="form-group">
             <label>备注</label>
             <textarea id="scrapNotes" class="input" rows="2"></textarea>
         </div>
-        <button class="btn btn-danger" onclick="doScrap()">确认报废</button>
-        <button class="btn btn-secondary" onclick="closeModal('scrapModal')">取消</button>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
+            <button class="btn btn-secondary" data-close-modal="scrapModal">取消</button>
+            <button class="btn btn-danger" id="btnDoScrap">确认报废</button>
+        </div>
     </div>
 </div>
 
@@ -82,246 +90,397 @@
         <div class="form-group">
             <label><input type="checkbox" id="resolveReturnStock"> 归还库存（而非回到原持有人）</label>
         </div>
-        <button class="btn btn-primary" onclick="doResolve()">确认完成</button>
-        <button class="btn btn-secondary" onclick="closeModal('resolveModal')">取消</button>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
+            <button class="btn btn-secondary" data-close-modal="resolveModal">取消</button>
+            <button class="btn btn-primary" id="btnDoResolve">确认完成</button>
+        </div>
     </div>
 </div>
 
 <!-- 归还对话框 -->
 <div id="returnModal" class="modal" style="display:none;">
     <div class="modal-content">
-        <h3>归还资产</h3>
+        <h3>回收入库</h3>
         <div class="form-group">
             <label>备注</label>
             <input type="text" id="returnNotes" class="input">
         </div>
-        <button class="btn btn-primary" onclick="doReturn()">确认归还</button>
-        <button class="btn btn-secondary" onclick="closeModal('returnModal')">取消</button>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
+            <button class="btn btn-secondary" data-close-modal="returnModal">取消</button>
+            <button class="btn btn-primary" id="btnDoReturn">确认归还</button>
+        </div>
     </div>
 </div>
 {% endblock %}
+
 {% block scripts %}
 <script>
-const assetId = {{ asset_id }};
-const statusLabels = {in_stock:'库存',assigned:'在用',maintenance:'维修中',scrapped:'已报废'};
-const statusClasses = {in_stock:'badge-instock',assigned:'badge-assigned',maintenance:'badge-maintenance',scrapped:'badge-scrapped'};
-const catLabels = {computer:'电脑',monitor:'显示器',phone:'手机',tablet:'平板',printer:'打印机',server:'服务器',network:'网络设备',firewall:'防火墙',switch:'交换机'};
-const catIcons = {computer:'\u{1F4BB}',monitor:'\u{1F5A5}',phone:'\u{1F4F1}',tablet:'\u{1F4CB}',printer:'\u{1F5A8}',server:'\u{1F5C4}',network:'\u{1F310}',firewall:'\u{1F6E1}',switch:'\u{1F500}'};
-const eventNames = {stock_in:'入库',assign:'分配',return:'归还',transfer:'转移',maintenance_start:'送修',maintenance_end:'维修完成',scrap:'报废',label_print:'打印标签'};
+(function() {
+    var assetId = {{ asset_id }};
+    var statusLabels = {in_stock:'库存',assigned:'在用',maintenance:'维修中',scrapped:'已报废'};
+    var statusBadgeClass = {in_stock:'badge-instock',assigned:'badge-assigned',maintenance:'badge-maintenance',scrapped:'badge-scrapped'};
+    var catLabels = {computer:'电脑',monitor:'显示器',phone:'手机',tablet:'平板',printer:'打印机',server:'服务器',network:'网络设备',firewall:'防火墙',switch:'交换机'};
+    var catIcons = {computer:'\u{1F4BB}',monitor:'\u{1F5A5}',phone:'\u{1F4F1}',tablet:'\u{1F4CB}',printer:'\u{1F5A8}',server:'\u{1F5C4}',network:'\u{1F310}',firewall:'\u{1F6E1}',switch:'\u{1F500}'};
+    var eventNames = {stock_in:'入库',assign:'分配',return:'归还',transfer:'转移',maintenance_start:'送修',maintenance_end:'维修完成',scrap:'报废',label_print:'打印标签'};
+    var maintStatusMap = {pending:'待处理',in_progress:'进行中',resolved:'已完成'};
 
-function makeEl(tag, className, text) {
-    const node = document.createElement(tag);
-    if (className) node.className = className;
-    if (text !== undefined && text !== null) node.textContent = text;
-    return node;
-}
-
-function makeDetailRow(label, valueNode) {
-    const tr = document.createElement('tr');
-    const th = makeEl('th', '', label);
-    const td = document.createElement('td');
-    if (typeof valueNode === 'string' || valueNode === undefined || valueNode === null) {
-        td.textContent = valueNode || '-';
-    } else {
-        td.appendChild(valueNode);
+    function makeEl(tag, cls, text) {
+        var node = document.createElement(tag);
+        if (cls) node.className = cls;
+        if (text !== undefined && text !== null) node.textContent = text;
+        return node;
     }
-    tr.append(th, td);
-    return tr;
-}
 
-async function loadDetail() {
-    const data = await apiFetch(`/api/assets/${assetId}`);
-    const el = document.getElementById('assetDetail');
-    el.replaceChildren();
-
-    const header = makeEl('div', 'detail-header');
-    header.appendChild(makeEl('h2', '', `${data.asset_tag} - ${data.name}`));
-    const statusBadge = makeEl('span', `badge ${statusClasses[data.status] || ''}`, statusLabels[data.status] || data.status);
-    header.appendChild(statusBadge);
-
-    const actions = makeEl('div', 'detail-actions');
-    function addActionBtn(label, cls, onclick) {
-        const btn = makeEl('button', `btn ${cls}`, label);
-        btn.type = 'button';
-        btn.addEventListener('click', onclick);
-        actions.appendChild(btn);
-    }
-    function addActionLink(label, cls, href, target) {
-        const a = makeEl('a', `btn ${cls}`, label);
-        a.href = href;
-        if (target) a.target = target;
-        actions.appendChild(a);
-    }
-    if (data.status === 'in_stock') addActionBtn('分配', 'btn-primary', () => openModal('assignModal'));
-    if (data.status === 'assigned') {
-        addActionBtn('归还', 'btn-secondary', () => openModal('returnModal'));
-        addActionBtn('转移', 'btn-secondary', () => openModal('transferModal'));
-        addActionBtn('送修', 'btn-warning', () => openModal('maintenanceModal'));
-    }
-    if (data.status === 'maintenance') addActionBtn('维修完成', 'btn-primary', () => openResolveModal());
-    if (data.status !== 'scrapped') addActionBtn('报废', 'btn-danger', () => openModal('scrapModal'));
-    addActionLink('打印标签', 'btn-secondary', `/assets/${assetId}/label`, '_blank');
-    addActionLink('编辑', 'btn-secondary', `/assets/${assetId}/edit`);
-
-    const infoSection = makeEl('div', 'detail-section');
-    infoSection.appendChild(makeEl('h3', '', '基本信息'));
-    const infoTable = makeEl('table', 'detail-table');
-    const categoryTd = document.createElement('td');
-    categoryTd.textContent = `${catIcons[data.category]||''} ${catLabels[data.category]||data.category}`;
-    infoTable.appendChild(makeDetailRow('类别', null)).querySelector('td').replaceWith(categoryTd);
-    infoTable.appendChild(makeDetailRow('品牌', data.brand));
-    infoTable.appendChild(makeDetailRow('型号', data.model));
-    infoTable.appendChild(makeDetailRow('序列号', data.serial_number));
-    infoTable.appendChild(makeDetailRow('持有人', data.holder_name));
-    infoTable.appendChild(makeDetailRow('位置', data.location));
-    infoTable.appendChild(makeDetailRow('购入日期', data.purchase_date));
-    infoTable.appendChild(makeDetailRow('购入价格', data.purchase_price ? '¥' + data.purchase_price : '-'));
-    if (data.warranty_date) {
-        const warrantyTd = document.createElement('td');
-        if (new Date(data.warranty_date) < new Date()) {
-            const expiredBadge = makeEl('span', 'badge badge-scrapped', '已过期');
-            warrantyTd.append(expiredBadge, ' ');
+    function propRow(label, valueEl) {
+        var tr = document.createElement('tr');
+        var td1 = makeEl('td', 'detail-prop-label', label);
+        var td2 = document.createElement('td');
+        td2.className = 'detail-prop-value';
+        if (typeof valueEl === 'string' || valueEl === undefined || valueEl === null) {
+            td2.textContent = valueEl || '-';
+        } else {
+            td2.appendChild(valueEl);
         }
-        warrantyTd.appendChild(document.createTextNode(data.warranty_date));
-        const warrantyRow = makeDetailRow('保修到期', null);
-        warrantyRow.querySelector('td').replaceWith(warrantyTd);
-        infoTable.appendChild(warrantyRow);
-    } else {
-        infoTable.appendChild(makeDetailRow('保修到期', '-'));
+        tr.append(td1, td2);
+        return tr;
     }
-    infoTable.appendChild(makeDetailRow('备注', data.notes));
-    infoSection.appendChild(infoTable);
 
-    const timelineSection = makeEl('div', 'detail-section');
-    timelineSection.appendChild(makeEl('h3', '', '生命周期时间线'));
-    if (data.events && data.events.length) {
-        const timeline = makeEl('div', 'timeline');
-        data.events.forEach(e => {
-            const item = makeEl('div', 'timeline-item');
-            item.appendChild(makeEl('div', 'timeline-dot'));
-            const content = makeEl('div', 'timeline-content');
-            content.appendChild(makeEl('div', 'timeline-title', eventNames[e.event_type] || e.event_type));
-            const parts = [new Date(e.created_at).toLocaleString('zh-CN'), e.operator_name || '', e.notes || ''].filter(Boolean);
-            content.appendChild(makeEl('div', 'timeline-meta', parts.join(' · ')));
-            item.appendChild(content);
-            timeline.appendChild(item);
+    async function loadDetail() {
+        var data;
+        try { data = await apiFetch('/api/assets/' + assetId); } catch(e) { return; }
+        var el = document.getElementById('assetDetail');
+        el.innerHTML = '';
+
+        // Back nav
+        var backDiv = makeEl('div', 'detail-back-nav');
+        var backLink = makeEl('a', 'detail-back-link');
+        backLink.href = '/assets';
+        backLink.textContent = '← 返回资产列表';
+        backDiv.appendChild(backLink);
+
+        // Header card
+        var headerCard = makeEl('div', 'detail-header-card');
+        var headerRow = makeEl('div', 'detail-header-row');
+        var titleArea = makeEl('div', 'detail-title-area');
+        titleArea.appendChild(makeEl('span', 'detail-cat-icon', catIcons[data.category] || '\u{1F4E6}'));
+        titleArea.appendChild(makeEl('h1', 'detail-title', data.name));
+        var badge = makeEl('span', 'status-badge ' + (statusBadgeClass[data.status] || ''));
+        badge.textContent = statusLabels[data.status] || data.status;
+        headerRow.appendChild(titleArea);
+        headerRow.appendChild(badge);
+        headerCard.appendChild(headerRow);
+
+        // Meta sub-line
+        var metaLine = makeEl('div', 'detail-meta-line');
+        metaLine.appendChild(makeEl('span', '', data.asset_tag));
+        metaLine.appendChild(document.createTextNode(' · '));
+        metaLine.appendChild(makeEl('span', '', catLabels[data.category] || data.category));
+        metaLine.appendChild(document.createTextNode(' · '));
+        metaLine.appendChild(makeEl('span', '', (data.brand || '') + ' ' + (data.model || '')));
+        headerCard.appendChild(metaLine);
+
+        if (data.notes) {
+            var notesDiv = makeEl('div', 'detail-notes-line', data.notes);
+            headerCard.appendChild(notesDiv);
+        }
+
+        // Action bar
+        var actions = makeEl('div', 'detail-actions');
+        function addBtn(label, cls, onclick) {
+            var btn = makeEl('button', cls ? 'btn ' + cls : 'btn', label);
+            btn.type = 'button';
+            if (onclick) btn.addEventListener('click', onclick);
+            actions.appendChild(btn);
+        }
+        function addLink(label, href, target) {
+            var a = makeEl('a', 'btn', label);
+            a.href = href;
+            if (target) a.target = target;
+            actions.appendChild(a);
+        }
+        if (data.status === 'in_stock') {
+            addBtn('分配', 'btn-primary', function() { loadUsers('assignUser'); openModal('assignModal'); });
+        }
+        if (data.status === 'assigned') {
+            addBtn('转移', 'btn-primary', function() { loadUsers('transferUser'); openModal('transferModal'); });
+            addBtn('送修', 'btn-secondary', function() { openModal('maintenanceModal'); });
+            addBtn('回收入库', 'btn-secondary', function() { openModal('returnModal'); });
+        }
+        if (data.status === 'maintenance') {
+            addBtn('维修完成', 'btn-primary', function() { openResolveModal(); });
+        }
+        if (data.status !== 'scrapped') {
+            addBtn('报废', 'btn-danger', function() { openModal('scrapModal'); });
+        }
+        addLink('打印标签', '/assets/' + assetId + '/label', '_blank');
+        addLink('编辑', '/assets/' + assetId + '/edit');
+
+        // Info grid: three columns
+        var infoGrid = makeEl('div', 'detail-info-grid');
+
+        // Left: basic info
+        var leftCard = makeEl('div', 'detail-info-card');
+        leftCard.appendChild(makeEl('div', 'detail-card-title', '基本信息'));
+        var leftTable = makeEl('table', 'detail-prop-table');
+        var catTd = document.createElement('td');
+        catTd.className = 'detail-prop-value';
+        catTd.textContent = (catIcons[data.category] || '') + ' ' + (catLabels[data.category] || data.category);
+        var catRow = document.createElement('tr');
+        catRow.append(makeEl('td', 'detail-prop-label', '类别'), catTd);
+        leftTable.appendChild(catRow);
+        leftTable.appendChild(propRow('品牌', data.brand));
+        leftTable.appendChild(propRow('型号', data.model));
+        var snTd = makeEl('td', 'detail-prop-value', data.serial_number || '-');
+        snTd.style.fontFamily = 'monospace';
+        snTd.style.fontSize = '13px';
+        var snRow = document.createElement('tr');
+        snRow.append(makeEl('td', 'detail-prop-label', '序列号'), snTd);
+        leftTable.appendChild(snRow);
+        leftTable.appendChild(propRow('购入日期', data.purchase_date));
+        leftTable.appendChild(propRow('购入价格', data.purchase_price ? '¥' + Number(data.purchase_price).toLocaleString('zh-CN', {minimumFractionDigits: 2}) : '-'));
+        // Warranty
+        if (data.warranty_date) {
+            var wTd = document.createElement('td');
+            wTd.className = 'detail-prop-value';
+            if (new Date(data.warranty_date) < new Date()) {
+                var expBadge = makeEl('span', 'badge badge-scrapped');
+                expBadge.style.fontSize = '11px';
+                expBadge.style.marginRight = '6px';
+                expBadge.textContent = '已过期';
+                wTd.appendChild(expBadge);
+            }
+            wTd.appendChild(document.createTextNode(data.warranty_date));
+            var wRow = document.createElement('tr');
+            wRow.append(makeEl('td', 'detail-prop-label', '保修到期'), wTd);
+            leftTable.appendChild(wRow);
+        } else {
+            leftTable.appendChild(propRow('保修到期', '-'));
+        }
+        leftCard.appendChild(leftTable);
+
+        // Middle: holder & location
+        var midCard = makeEl('div', 'detail-info-card');
+        midCard.appendChild(makeEl('div', 'detail-card-title', '持有人 & 位置'));
+        var midTable = makeEl('table', 'detail-prop-table');
+        var holderTd = document.createElement('td');
+        holderTd.className = 'detail-prop-value';
+        if (data.holder_name && data.status !== 'in_stock') {
+            holderTd.textContent = data.holder_name;
+        } else {
+            var emptySpan = makeEl('span', 'detail-holder-empty', '仓库 / 暂无持有人');
+            holderTd.appendChild(emptySpan);
+        }
+        var holderRow = document.createElement('tr');
+        holderRow.append(makeEl('td', 'detail-prop-label', '当前持有人'), holderTd);
+        midTable.appendChild(holderRow);
+        midTable.appendChild(propRow('所属部门', data.holder_dept));
+        var locTd = document.createElement('td');
+        locTd.className = 'detail-prop-value';
+        var locWrap = makeEl('div', 'detail-location-wrap');
+        if (data.location) {
+            locWrap.appendChild(makeEl('span', '', '\u{1F4CD} '));
+        }
+        locWrap.appendChild(makeEl('span', '', data.location || '-'));
+        locTd.appendChild(locWrap);
+        var locRow = document.createElement('tr');
+        locRow.append(makeEl('td', 'detail-prop-label', '存放位置'), locTd);
+        midTable.appendChild(locRow);
+        midCard.appendChild(midTable);
+
+        // Right: asset trace (timeline)
+        var rightCard = makeEl('div', 'detail-info-card');
+        var tlTitle = makeEl('div', 'detail-card-title');
+        tlTitle.appendChild(makeEl('span', '', '资产轨迹'));
+        var countBadge = makeEl('span', 'detail-count-badge');
+        countBadge.textContent = (data.events ? data.events.length : 0) + ' 条';
+        tlTitle.appendChild(countBadge);
+        rightCard.appendChild(tlTitle);
+
+        if (data.events && data.events.length) {
+            var tlContainer = makeEl('div', 'detail-timeline');
+            tlContainer.appendChild(makeEl('div', 'detail-timeline-spine'));
+            data.events.forEach(function(ev) {
+                var node = makeEl('div', 'detail-timeline-node');
+                node.appendChild(makeEl('div', 'detail-timeline-dot dot-' + ev.event_type));
+                var box = makeEl('div', '');
+                box.appendChild(makeEl('div', 'detail-timeline-event', eventNames[ev.event_type] || ev.event_type));
+                var dateStr = ev.created_at ? ev.created_at.split(' ')[0] : '';
+                box.appendChild(makeEl('div', 'detail-timeline-meta', dateStr + ' · ' + (ev.operator_name || '系统')));
+                if (ev.notes) {
+                    box.appendChild(makeEl('div', 'detail-timeline-note', ev.notes));
+                }
+                node.appendChild(box);
+                tlContainer.appendChild(node);
+            });
+            rightCard.appendChild(tlContainer);
+        } else {
+            var empty = makeEl('div', 'detail-empty-state');
+            empty.appendChild(makeEl('div', 'detail-empty-icon', '\u{1F4ED}'));
+            empty.appendChild(makeEl('p', '', '暂无记录'));
+            rightCard.appendChild(empty);
+        }
+
+        infoGrid.appendChild(leftCard);
+        infoGrid.appendChild(midCard);
+        infoGrid.appendChild(rightCard);
+
+        // Maintenance section (full width below)
+        var maintCard = makeEl('div', 'detail-info-card');
+        maintCard.style.marginBottom = '0';
+        maintCard.appendChild(makeEl('div', 'detail-card-title', '维修记录'));
+
+        if (data.maintenance_records && data.maintenance_records.length) {
+            var mTable = makeEl('table', 'detail-maint-table');
+            var mThead = document.createElement('thead');
+            var mHeadRow = document.createElement('tr');
+            ['日期','描述','状态','费用','备注'].forEach(function(t) {
+                mHeadRow.appendChild(makeEl('th', '', t));
+            });
+            mThead.appendChild(mHeadRow);
+            mTable.appendChild(mThead);
+            var mTbody = document.createElement('tbody');
+            data.maintenance_records.forEach(function(m) {
+                var tr = document.createElement('tr');
+                var d = m.created_at ? new Date(m.created_at).toLocaleDateString('zh-CN') : '-';
+                tr.appendChild(makeEl('td', '', d));
+                tr.appendChild(makeEl('td', '', m.description));
+                var statusBadge = makeEl('span', 'status-badge badge-' + (m.status === 'in_progress' ? 'maintenance' : (m.status === 'resolved' ? 'assigned' : 'badge-instock')));
+                statusBadge.textContent = maintStatusMap[m.status] || m.status;
+                var statusTd = makeEl('td');
+                statusTd.appendChild(statusBadge);
+                tr.appendChild(statusTd);
+                tr.appendChild(makeEl('td', '', m.cost ? '¥' + Number(m.cost).toFixed(2) : '-'));
+                tr.appendChild(makeEl('td', '', m.repair_notes || '-'));
+                mTbody.appendChild(tr);
+            });
+            mTable.appendChild(mTbody);
+            maintCard.appendChild(mTable);
+        } else {
+            var mEmpty = makeEl('div', 'detail-empty-state');
+            mEmpty.appendChild(makeEl('div', 'detail-empty-icon', '\u{1F6E0}️'));
+            mEmpty.appendChild(makeEl('p', '', '暂无维修记录'));
+            maintCard.appendChild(mEmpty);
+        }
+
+        el.appendChild(backDiv);
+        el.appendChild(headerCard);
+        el.appendChild(actions);
+        el.appendChild(infoGrid);
+        el.appendChild(maintCard);
+    }
+
+    function openModal(id) { document.getElementById(id).style.display = 'flex'; }
+    function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+
+    async function loadUsers(selectId) {
+        var sel = document.getElementById(selectId);
+        if (sel.options.length > 1) return;
+        try {
+            var res = await fetch('/api/users');
+            if (!res.ok) return;
+            var data = await res.json();
+            sel.innerHTML = '<option value="">请选择</option>';
+            data.users.forEach(function(u) {
+                var opt = document.createElement('option');
+                opt.value = u.id;
+                opt.textContent = u.name + ' (' + u.employee_id + ')';
+                sel.appendChild(opt);
+            });
+        } catch(e) {}
+    }
+
+    async function doAssign() {
+        var uid = document.getElementById('assignUser').value;
+        var notes = document.getElementById('assignNotes').value;
+        try {
+            await apiFetch('/api/assets/' + assetId + '/assign', {method:'POST', body:JSON.stringify({target_user_id:parseInt(uid), notes:notes})});
+            closeModal('assignModal');
+            loadDetail();
+        } catch(e) {}
+    }
+
+    async function doReturn() {
+        var notes = document.getElementById('returnNotes').value;
+        try {
+            await apiFetch('/api/assets/' + assetId + '/return', {method:'POST', body:JSON.stringify({notes:notes})});
+            closeModal('returnModal');
+            loadDetail();
+        } catch(e) {}
+    }
+
+    async function doTransfer() {
+        var uid = document.getElementById('transferUser').value;
+        var notes = document.getElementById('transferNotes').value;
+        try {
+            await apiFetch('/api/assets/' + assetId + '/transfer', {method:'POST', body:JSON.stringify({target_user_id:parseInt(uid), notes:notes})});
+            closeModal('transferModal');
+            loadDetail();
+        } catch(e) {}
+    }
+
+    async function doMaintenance() {
+        var desc = document.getElementById('maintenanceDesc').value;
+        try {
+            await apiFetch('/api/assets/' + assetId + '/maintenance', {method:'POST', body:JSON.stringify({description:desc})});
+            closeModal('maintenanceModal');
+            loadDetail();
+        } catch(e) {}
+    }
+
+    async function doScrap() {
+        var notes = document.getElementById('scrapNotes').value;
+        try {
+            await apiFetch('/api/assets/' + assetId + '/scrap', {method:'POST', body:JSON.stringify({notes:notes})});
+            closeModal('scrapModal');
+            loadDetail();
+        } catch(e) {}
+    }
+
+    function openResolveModal() {
+        openModal('resolveModal');
+    }
+
+    async function doResolve() {
+        var cost = document.getElementById('resolveCost').value;
+        var notes = document.getElementById('resolveNotes').value;
+        var returnStock = document.getElementById('resolveReturnStock').checked;
+        try {
+            var data = await apiFetch('/api/assets/' + assetId);
+            var record = data.maintenance_records.find(function(r) { return r.status === 'in_progress'; });
+            if (!record) { alert('未找到进行中的维修记录'); return; }
+            await apiFetch('/api/assets/' + assetId + '/maintenance/' + record.id + '/resolve', {
+                method:'POST',
+                body:JSON.stringify({cost:cost?parseFloat(cost):null, repair_notes:notes, return_to_stock:returnStock}),
+            });
+            closeModal('resolveModal');
+            loadDetail();
+        } catch(e) {}
+    }
+
+    // Bind confirm buttons via addEventListener (not inline onclick)
+    document.getElementById('btnDoAssign').addEventListener('click', function() { doAssign(); loadUsers('assignUser'); });
+    document.getElementById('btnDoTransfer').addEventListener('click', function() { doTransfer(); loadUsers('transferUser'); });
+    document.getElementById('btnDoMaintenance').addEventListener('click', function() { doMaintenance(); });
+    document.getElementById('btnDoScrap').addEventListener('click', function() { doScrap(); });
+    document.getElementById('btnDoResolve').addEventListener('click', function() { doResolve(); });
+    document.getElementById('btnDoReturn').addEventListener('click', function() { doReturn(); });
+
+    // Close modal buttons
+    document.querySelectorAll('[data-close-modal]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var modalId = btn.getAttribute('data-close-modal');
+            document.getElementById(modalId).style.display = 'none';
         });
-        timelineSection.appendChild(timeline);
-    } else {
-        timelineSection.appendChild(makeEl('p', 'text-muted', '暂无生命周期事件'));
-    }
+    });
 
-    const maintSection = makeEl('div', 'detail-section');
-    maintSection.appendChild(makeEl('h3', '', '维修记录'));
-    const maintStatusMap = {pending:'待处理', in_progress:'进行中', resolved:'已完成'};
-    if (data.maintenance_records && data.maintenance_records.length) {
-        const maintTable = makeEl('table', 'table');
-        const thead = document.createElement('thead');
-        const headRow = document.createElement('tr');
-        ['日期','描述','状态','费用','备注'].forEach(t => headRow.appendChild(makeEl('th','',t)));
-        thead.appendChild(headRow);
-        maintTable.appendChild(thead);
-        const tbody = document.createElement('tbody');
-        data.maintenance_records.forEach(m => {
-            const tr = document.createElement('tr');
-            tr.appendChild(makeEl('td', '', new Date(m.created_at).toLocaleDateString('zh-CN')));
-            tr.appendChild(makeEl('td', '', m.description));
-            tr.appendChild(makeEl('td', '', maintStatusMap[m.status] || m.status));
-            tr.appendChild(makeEl('td', '', m.cost || '-'));
-            tr.appendChild(makeEl('td', '', m.repair_notes || '-'));
-            tbody.appendChild(tr);
+    // Close modals on backdrop click
+    ['assignModal','transferModal','maintenanceModal','scrapModal','resolveModal','returnModal'].forEach(function(id) {
+        document.getElementById(id).addEventListener('click', function(e) {
+            if (e.target === this) this.style.display = 'none';
         });
-        maintTable.appendChild(tbody);
-        maintSection.appendChild(maintTable);
-    } else {
-        maintSection.appendChild(makeEl('p', 'text-muted', '暂无维修记录'));
-    }
-
-    el.append(header, actions, infoSection, timelineSection, maintSection);
-
-    // 加载用户列表用于分配/转移
-    const usersRes = await apiFetch('/api/stats');
-    // 从 API 获取用户 - 简化: 从维护记录中取
-}
-
-function openModal(id) { document.getElementById(id).style.display = 'flex'; }
-function closeModal(id) { document.getElementById(id).style.display = 'none'; }
-
-async function loadUsers(selectId) {
-    const sel = document.getElementById(selectId);
-    if (sel.options.length > 1) return;
-    // 简化：从 my/assets 借助已有数据，实际应加 /api/users 端点
-    // 临时方案：直接从数据库端查询
-    const res = await fetch('/api/users');
-    if (!res.ok) return;
-    const data = await res.json();
-    sel.innerHTML = '<option value="">请选择</option>';
-    data.users.forEach(u => {
-        sel.innerHTML += `<option value="${u.id}">${u.name} (${u.employee_id})</option>`;
     });
-}
 
-async function doAssign() {
-    const uid = document.getElementById('assignUser').value;
-    const notes = document.getElementById('assignNotes').value;
-    await apiFetch(`/api/assets/${assetId}/assign`, {method:'POST', body:JSON.stringify({target_user_id:parseInt(uid), notes})});
-    closeModal('assignModal');
     loadDetail();
-}
-
-async function doReturn() {
-    const notes = document.getElementById('returnNotes').value;
-    await apiFetch(`/api/assets/${assetId}/return`, {method:'POST', body:JSON.stringify({notes})});
-    closeModal('returnModal');
-    loadDetail();
-}
-
-async function doTransfer() {
-    const uid = document.getElementById('transferUser').value;
-    const notes = document.getElementById('transferNotes').value;
-    await apiFetch(`/api/assets/${assetId}/transfer`, {method:'POST', body:JSON.stringify({target_user_id:parseInt(uid), notes})});
-    closeModal('transferModal');
-    loadDetail();
-}
-
-async function doMaintenance() {
-    const desc = document.getElementById('maintenanceDesc').value;
-    await apiFetch(`/api/assets/${assetId}/maintenance`, {method:'POST', body:JSON.stringify({description:desc})});
-    closeModal('maintenanceModal');
-    loadDetail();
-}
-
-async function doScrap() {
-    const notes = document.getElementById('scrapNotes').value;
-    await apiFetch(`/api/assets/${assetId}/scrap`, {method:'POST', body:JSON.stringify({notes})});
-    closeModal('scrapModal');
-    loadDetail();
-}
-
-function openResolveModal() {
-    // 找到最近的 in_progress 维修记录
-    openModal('resolveModal');
-}
-
-async function doResolve() {
-    const cost = document.getElementById('resolveCost').value;
-    const notes = document.getElementById('resolveNotes').value;
-    const returnStock = document.getElementById('resolveReturnStock').checked;
-    // 获取维修记录 ID
-    const data = await apiFetch(`/api/assets/${assetId}`);
-    const record = data.maintenance_records.find(r => r.status === 'in_progress');
-    if (!record) { alert('未找到进行中的维修记录'); return; }
-    await apiFetch(`/api/assets/${assetId}/maintenance/${record.id}/resolve`, {
-        method:'POST', body:JSON.stringify({cost:cost?parseFloat(cost):null, repair_notes:notes, return_to_stock:returnStock}),
-    });
-    closeModal('resolveModal');
-    loadDetail();
-}
-
-// 暴露 loadUsers 供 modal 打开时调用
-document.getElementById('assignModal').addEventListener('click', () => loadUsers('assignUser'));
-document.getElementById('transferModal').addEventListener('click', () => loadUsers('transferUser'));
-
-loadDetail();
+})();
 </script>
 {% endblock %}

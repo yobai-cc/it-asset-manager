@@ -35,10 +35,25 @@ function onScanSuccess(decodedText) {
         lookupByTag(decodedText.trim());
         return;
     }
-    if (decodedText.startsWith('http')) {
+    if (!decodedText.startsWith('http')) {
+        const statusEl = document.getElementById('scanStatus');
+        statusEl.textContent = '扫描内容非资产二维码：' + decodedText.substring(0, 50);
+        statusEl.style.color = 'var(--warning)';
+        return;
+    }
+    try {
+        const url = new URL(decodedText, window.location.origin);
+        if (url.origin !== window.location.origin) {
+            const statusEl = document.getElementById('scanStatus');
+            statusEl.textContent = '二维码指向外部地址，已拦截跳转：' + url.hostname;
+            statusEl.style.color = 'var(--danger)';
+            return;
+        }
         location.href = decodedText;
-    } else {
-        document.getElementById('scanStatus').textContent = '无法识别: ' + decodedText;
+    } catch(e) {
+        const statusEl = document.getElementById('scanStatus');
+        statusEl.textContent = '无法识别的二维码内容';
+        statusEl.style.color = 'var(--warning)';
     }
 }
 
@@ -51,9 +66,17 @@ function onScanStarted() {
 }
 
 function onScanError(err) {
+    const msg = String(err);
     document.getElementById('scanArea').style.display = 'none';
     document.getElementById('scanError').style.display = 'block';
-    document.getElementById('scanErrorMsg').textContent = '无法启动摄像头，请确认已授权摄像头权限，或使用下方手动输入';
+    const errEl = document.getElementById('scanErrorMsg');
+    if (msg.includes('NotAllowed') || msg.includes('Permission')) {
+        errEl.textContent = '摄像头权限被拒绝。请在浏览器地址栏左侧点击图标，允许摄像头访问后刷新页面。';
+    } else if (msg.includes('NotFound') || msg.includes('device not found')) {
+        errEl.textContent = '未检测到摄像头设备。请确认设备配有摄像头，或使用下方手动输入。';
+    } else {
+        errEl.textContent = '摄像头启动失败。请检查摄像头是否正常，或使用下方手动输入。';
+    }
 }
 
 const html5QrCode = new Html5Qrcode("reader");
@@ -120,22 +143,32 @@ function renderResult(asset, tag) {
 }
 
 async function lookupByTag(tag) {
+    const statusEl = document.getElementById('scanStatus');
     try {
         const res = await fetch('/api/public/asset-lookup?asset_tag=' + encodeURIComponent(tag));
         const data = await res.json();
         if (res.ok && data.id) {
             location.href = '/scan/' + data.id;
         } else {
-            document.getElementById('scanStatus').textContent = data.error || ('未找到资产: ' + tag);
+            statusEl.textContent = '未找到标签号「' + tag + '」对应的资产，请检查编号是否正确';
+            statusEl.style.color = 'var(--danger)';
         }
     } catch(e) {
-        document.getElementById('scanStatus').textContent = '查询失败';
+        statusEl.textContent = '网络请求失败，请检查网络后重试';
+        statusEl.style.color = 'var(--danger)';
     }
 }
 
 async function searchByTag() {
     const tag = document.getElementById('manualTag').value.trim();
-    if (!tag) return;
+    const statusEl = document.getElementById('scanStatus');
+    if (!tag) {
+        statusEl.textContent = '请输入资产标签号（如 PC-2026-0001）';
+        statusEl.style.color = 'var(--warning)';
+        return;
+    }
+    statusEl.textContent = '正在查询...';
+    statusEl.style.color = '';
     await lookupByTag(tag);
 }
 </script>

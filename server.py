@@ -3,11 +3,15 @@ import csv
 import io
 import json
 import os
+from datetime import date, datetime
 from flask import Flask, g, jsonify, request, render_template, redirect, url_for, session, Response
 from werkzeug.security import check_password_hash
 from models import (
     Database, VALID_CATEGORIES, VALID_STATUSES, STATE_TRANSITIONS,
     log_activity, get_categories_meta, LABEL_FIELDS_DEFAULT,
+    LABEL_FIELD_OPTIONS, LABEL_FIELDS_MAX, LABEL_FIXED_FIELDS,
+    VALID_ROLES, VALID_CONSUMABLE_TYPES, VALID_PRINTER_TYPES,
+    VALID_TONER_COLORS, VALID_TONER_MODELS,
 )
 
 app = Flask(__name__)
@@ -39,6 +43,80 @@ def _parse_positive_int_arg(name, default, max_value=None):
     if max_value is not None:
         value = min(value, max_value)
     return value, None
+
+
+def _parse_iso_date(value, field_name):
+    if not value:
+        return None, None
+    try:
+        return date.fromisoformat(value), None
+    except (TypeError, ValueError):
+        return None, (jsonify({"error": f"{field_name} 必须是 YYYY-MM-DD 日期"}), 400)
+
+
+def _validate_non_negative_int(data, field_name, required=False):
+    """验证字段是非负整数，返回 (value, error_response)"""
+    val = data.get(field_name)
+    if val is None:
+        if required:
+            return None, (jsonify({"error": f"缺少必填字段: {field_name}"}), 400)
+        return None, None
+    if isinstance(val, bool) or not isinstance(val, int):
+        return None, (jsonify({"error": f"{field_name} 必须是整数"}), 400)
+    if val < 0:
+        return None, (jsonify({"error": f"{field_name} 不能为负数"}), 400)
+    return val, None
+
+
+def _validate_non_negative_number(data, field_name, allow_none=True):
+    """验证字段是非负数字（int 或 float），返回 (value, error_response)"""
+    val = data.get(field_name)
+    if val is None:
+        return None, None
+    if isinstance(val, bool) or not isinstance(val, (int, float)):
+        return None, (jsonify({"error": f"{field_name} 必须是数字"}), 400)
+    if val < 0:
+        return None, (jsonify({"error": f"{field_name} 不能为负数"}), 400)
+    return val, None
+
+
+def _validate_printer_asset_id(conn, asset_id):
+    """验证 asset_id 对应的资产存在且为打印机。返回 (ok, error_response)"""
+    if asset_id is None:
+        return True, None
+    row = conn.execute("SELECT category FROM asset WHERE id = ?", (asset_id,)).fetchone()
+    if not row:
+        return False, (jsonify({"error": "关联资产不存在"}), 400)
+    if row["category"] != "printer":
+        return False, (jsonify({"error": "耗材只能关联打印机类资产"}), 400)
+    return True, None
+
+
+def _consumable_usage_fields(row):
+    data = dict(row)
+    installed_at = data.get("installed_at")
+    usage_days = None
+    estimated_daily_cost = None
+    if installed_at:
+        try:
+            usage_days = max((date.today() - date.fromisoformat(installed_at)).days, 1)
+        except ValueError:
+            usage_days = None
+    price = data.get("current_price")
+    if usage_days and price is not None:
+        estimated_daily_cost = round(float(price) / usage_days, 2)
+    data["usage_days"] = usage_days
+    data["estimated_daily_cost"] = estimated_daily_cost
+    return data
+
+
+def _select_consumable_with_printer(conn, consumable_id):
+    return conn.execute(
+        """SELECT pc.*, a.asset_tag as printer_tag, a.name as printer_name
+           FROM printer_consumable pc
+           LEFT JOIN asset a ON pc.asset_id = a.id
+           WHERE pc.id = ?""", (consumable_id,),
+    ).fetchone()
 
 
 # ---- 认证辅助 ----
@@ -139,6 +217,105 @@ def maintenance_page():
     if not user:
         return redirect(url_for("login_page"))
     return render_template("admin/maintenance.html", user=user)
+
+
+@app.route("/consumables")
+def consumables_page():
+    user = require_role("admin")
+    if not user:
+        return redirect(url_for("login_page"))
+    # Fetch printer-consumables data for server-side rendering
+    db = get_db()
+    printers_data = []
+    with db.get_conn() as conn:
+        rows = conn.execute("""
+            SELECT a.id as asset_id, a.asset_tag, a.name as printer_name,
+                   a.brand, a.model, a.printer_type,
+                   pc.id as c_id, pc.name as c_name, pc.type as c_type,
+                   pc.stock as c_stock, pc.threshold as c_threshold,
+                   pc.color as c_color, pc.model as c_model,
+                   pc.current_price as c_current_price,
+                   pc.installed_at as c_installed_at,
+                   pc.unit as c_unit, pc.notes as c_notes
+            FROM asset a
+            LEFT JOIN printer_consumable pc ON pc.asset_id = a.id AND pc.type = 'toner'
+            WHERE a.category = 'printer'
+            ORDER BY a.id, pc.id
+        """).fetchall()
+        printers_map = {}
+        for r in rows:
+            aid = r["asset_id"]
+            if aid not in printers_map:
+                printers_map[aid] = {
+                    "asset_id": aid,
+                    "asset_tag": r["asset_tag"],
+                    "printer_name": r["printer_name"],
+                    "brand": r["brand"],
+                    "model": r["model"],
+                    "printer_type_db": r["printer_type"],
+                    "_consumables_raw": [],
+                }
+            # Use canonical field names (same shape as /api/printers/consumables)
+            if r["c_id"] is not None:
+                printers_map[aid]["_consumables_raw"].append({
+                    "id": r["c_id"],
+                    "name": r["c_name"],
+                    "type": r["c_type"],
+                    "stock": r["c_stock"],
+                    "threshold": r["c_threshold"],
+                    "color": r["c_color"],
+                    "model": r["c_model"],
+                    "current_price": r["c_current_price"],
+                    "installed_at": r["c_installed_at"],
+                    "unit": r["c_unit"],
+                    "notes": r["c_notes"],
+                    "asset_id": aid,
+                    "printer_tag": r["asset_tag"],
+                    "printer_name": r["printer_name"],
+                })
+
+        for p in printers_map.values():
+            if _is_label_printer(p["printer_name"], p["brand"], p["model"]):
+                continue
+            raw = p["_consumables_raw"]
+            # Use explicit printer_type if set, otherwise infer from consumables
+            explicit_pt = p.get("printer_type_db")
+            if explicit_pt in VALID_PRINTER_TYPES:
+                printer_type = explicit_pt
+            else:
+                printer_type = _infer_printer_type(raw)
+            slots = []
+            low_stock_count = 0
+            for c in raw:
+                enriched = _consumable_usage_fields(dict(c))
+                is_low = c["stock"] <= c["threshold"] and c["threshold"] > 0
+                enriched["is_low_stock"] = is_low
+                if is_low:
+                    low_stock_count += 1
+                enriched["recent_replacements"] = []
+                slots.append(enriched)
+            printers_data.append({
+                "asset_id": p["asset_id"],
+                "asset_tag": p["asset_tag"],
+                "printer_name": p["printer_name"],
+                "printer_type": printer_type,
+                "brand": p["brand"],
+                "model": p["model"],
+                "consumables": slots,
+                "has_warning": low_stock_count > 0,
+                "total_slots": len(slots),
+                "low_stock_count": low_stock_count,
+            })
+    return render_template("admin/consumables.html", user=user,
+                           printers_data=printers_data)
+
+
+@app.route("/users")
+def users_page():
+    user = require_role("admin")
+    if not user:
+        return redirect(url_for("login_page"))
+    return render_template("admin/users.html", user=user)
 
 
 # ---- 员工自助页面 ----
@@ -395,18 +572,26 @@ def api_assets_create():
     if data["category"] not in VALID_CATEGORIES:
         return jsonify({"error": f"无效的分类: {data['category']}"}), 400
 
+    # Validate printer_type for printer assets
+    printer_type = data.get("printer_type")
+    if printer_type is not None:
+        if data["category"] != "printer":
+            return jsonify({"error": "printer_type 仅适用于打印机类资产"}), 400
+        if printer_type not in VALID_PRINTER_TYPES:
+            return jsonify({"error": f"无效的打印机类型: {printer_type}，可选: {', '.join(VALID_PRINTER_TYPES)}"}), 400
+
     db = get_db()
     with db.get_conn() as conn:
         asset_tag = db.generate_asset_tag(conn, data["category"])
         cursor = conn.execute(
             """INSERT INTO asset (asset_tag, name, category, brand, model, serial_number,
-               status, location, purchase_date, purchase_price, notes, warranty_date)
-               VALUES (?, ?, ?, ?, ?, ?, 'in_stock', ?, ?, ?, ?, ?)""",
+               status, location, purchase_date, purchase_price, notes, warranty_date, printer_type)
+               VALUES (?, ?, ?, ?, ?, ?, 'in_stock', ?, ?, ?, ?, ?, ?)""",
             (
                 asset_tag, data["name"], data["category"],
                 data.get("brand"), data.get("model"), data.get("serial_number"),
                 data.get("location"), data.get("purchase_date"), data.get("purchase_price"),
-                data.get("notes"), data.get("warranty_date"),
+                data.get("notes"), data.get("warranty_date"), printer_type,
             ),
         )
         asset_id = cursor.lastrowid
@@ -462,6 +647,10 @@ def api_assets_update(asset_id):
         row = conn.execute("SELECT * FROM asset WHERE id = ?", (asset_id,)).fetchone()
         if not row:
             return jsonify({"error": "资产不存在"}), 404
+        current = dict(row)
+        effective_category = data.get("category", current["category"])
+        if "category" in data and effective_category not in VALID_CATEGORIES:
+            return jsonify({"error": f"无效的分类: {effective_category}"}), 400
         fields = []
         params = []
         for col in ["name", "brand", "model", "serial_number", "location",
@@ -469,6 +658,18 @@ def api_assets_update(asset_id):
             if col in data:
                 fields.append(f"{col} = ?")
                 params.append(data[col])
+        # printer_type validation
+        if "printer_type" in data:
+            pt = data["printer_type"]
+            if effective_category != "printer":
+                return jsonify({"error": "printer_type 仅适用于打印机类资产"}), 400
+            if pt is not None and pt not in VALID_PRINTER_TYPES:
+                return jsonify({"error": f"无效的打印机类型: {pt}，可选: {', '.join(VALID_PRINTER_TYPES)}"}), 400
+            fields.append("printer_type = ?")
+            params.append(pt)
+        elif "category" in data and effective_category != "printer" and current.get("printer_type") is not None:
+            fields.append("printer_type = ?")
+            params.append(None)
         if fields:
             fields.append("updated_at = CURRENT_TIMESTAMP")
             conn.execute(f"UPDATE asset SET {', '.join(fields)} WHERE id = ?",
@@ -902,20 +1103,6 @@ def api_my_applications_create():
         ).fetchone()
     return jsonify(dict(row)), 201
 
-
-# ---- API: 用户列表 ----
-
-@app.route("/api/users")
-def api_users():
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
-    db = get_db()
-    with db.get_conn() as conn:
-        rows = conn.execute('SELECT id, employee_id, name, department, role FROM "user" ORDER BY name').fetchall()
-    return jsonify({"users": [dict(r) for r in rows]})
-
-
 # ---- API: 标签 / 二维码 ----
 
 @app.route("/api/assets/<int:asset_id>/qr")
@@ -1028,6 +1215,32 @@ def api_categories():
 
 # ---- API: 标签配置 ----
 
+def _label_settings_payload(fields):
+    return {
+        "fields": fields,
+        "options": [
+            {"key": key, **meta}
+            for key, meta in LABEL_FIELD_OPTIONS.items()
+        ],
+        "fixed_fields": LABEL_FIXED_FIELDS,
+        "max_fields": LABEL_FIELDS_MAX,
+    }
+
+
+def _normalize_label_fields(raw_fields):
+    if not isinstance(raw_fields, list):
+        return LABEL_FIELDS_DEFAULT
+    fields = []
+    for field in raw_fields:
+        if field in LABEL_FIELD_OPTIONS and field not in fields:
+            fields.append(field)
+        if len(fields) >= LABEL_FIELDS_MAX:
+            break
+    if fields:
+        return fields
+    return [] if not raw_fields else LABEL_FIELDS_DEFAULT
+
+
 @app.route("/api/settings/label", methods=["GET"])
 def api_label_settings():
     db = get_db()
@@ -1036,12 +1249,10 @@ def api_label_settings():
     if raw:
         try:
             loaded = json.loads(raw)
-            if isinstance(loaded, list):
-                from models import LABEL_FIELD_OPTIONS
-                fields = [f for f in loaded if f in LABEL_FIELD_OPTIONS] or LABEL_FIELDS_DEFAULT
+            fields = _normalize_label_fields(loaded)
         except json.JSONDecodeError:
             fields = LABEL_FIELDS_DEFAULT
-    return jsonify({"fields": fields})
+    return jsonify(_label_settings_payload(fields))
 
 
 @app.route("/api/settings/label", methods=["PUT"])
@@ -1050,16 +1261,15 @@ def api_label_settings_update():
     if not user:
         return jsonify({"error": "权限不足"}), 403
     data = request.get_json() or {}
-    from models import LABEL_FIELD_OPTIONS
     fields = data.get("fields", [])
     if not isinstance(fields, list):
         return jsonify({"error": "fields 必须是数组"}), 400
-    fields = [f for f in fields if f in LABEL_FIELD_OPTIONS]
+    fields = _normalize_label_fields(fields)
     db = get_db()
     with db.get_conn() as conn:
         db.set_config("label_fields", json.dumps(fields), conn=conn)
         log_activity(conn, user["id"], "update_settings", "config", None, f"标签字段: {', '.join(fields)}")
-    return jsonify({"fields": fields})
+    return jsonify(_label_settings_payload(fields))
 
 
 # ---- API: QR 基础地址 ----
@@ -1311,6 +1521,846 @@ def scan_camera_page():
 @app.route("/scan/<int:asset_id>")
 def scan_page(asset_id):
     return render_template("scan.html", asset_id=asset_id)
+
+
+# ---- API: 打印机耗材管理 ----
+
+@app.route("/api/consumables", methods=["GET"])
+def api_consumables_list():
+    user = require_role("admin")
+    if not user:
+        return jsonify({"error": "权限不足"}), 403
+    db = get_db()
+    ctype = request.args.get("type")
+    asset_id = request.args.get("asset_id")
+    low_stock = request.args.get("low_stock", "").lower() == "true"
+
+    where_clauses = []
+    params = []
+    if ctype:
+        where_clauses.append("pc.type = ?")
+        params.append(ctype)
+    if asset_id:
+        try:
+            asset_id_int = int(asset_id)
+        except ValueError:
+            return jsonify({"error": "asset_id 必须是整数"}), 400
+        where_clauses.append("pc.asset_id = ?")
+        params.append(asset_id_int)
+    if low_stock:
+        where_clauses.append("pc.stock <= pc.threshold")
+
+    where = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
+    with db.get_conn() as conn:
+        total = conn.execute(
+            f"SELECT COUNT(*) as c FROM printer_consumable pc{where}", params
+        ).fetchone()["c"]
+        rows = conn.execute(
+            f"""SELECT pc.*, a.asset_tag as printer_tag, a.name as printer_name
+                FROM printer_consumable pc
+                LEFT JOIN asset a ON pc.asset_id = a.id
+                {where} ORDER BY pc.created_at DESC""",
+            params,
+        ).fetchall()
+        consumables = [_consumable_usage_fields(r) for r in rows]
+    return jsonify({"total": total, "consumables": consumables})
+
+
+@app.route("/api/consumables", methods=["POST"])
+def api_consumables_create():
+    user = require_role("admin")
+    if not user:
+        return jsonify({"error": "权限不足"}), 403
+    data = request.get_json() or {}
+
+    ctype = data.get("type", "toner")
+    if ctype != "toner":
+        return jsonify({"error": f"墨粉管理只支持 toner 类型，收到: {ctype}"}), 400
+
+    # Validate model (toner source: 原装/国产)
+    cmodel = data.get("model")
+    if cmodel is not None and cmodel not in VALID_TONER_MODELS:
+        return jsonify({"error": f"无效的墨粉型号: {cmodel}，可选: {', '.join(VALID_TONER_MODELS)}"}), 400
+
+    stock, err = _validate_non_negative_int(data, "stock")
+    if err:
+        return err
+    threshold, err = _validate_non_negative_int(data, "threshold")
+    if err:
+        return err
+    price, err = _validate_non_negative_number(data, "current_price")
+    if err:
+        return err
+    installed_at_raw = data.get("installed_at")
+    if installed_at_raw is not None:
+        _, date_err = _parse_iso_date(installed_at_raw, "installed_at")
+        if date_err:
+            return date_err
+
+    asset_id = data.get("asset_id")
+
+    # Validate color for toner
+    color = data.get("color")
+    if color is not None and color not in VALID_TONER_COLORS:
+        return jsonify({"error": f"无效的墨粉颜色: {color}，可选: {', '.join(VALID_TONER_COLORS)}"}), 400
+
+    db = get_db()
+    with db.get_conn() as conn:
+        ok, err = _validate_printer_asset_id(conn, asset_id)
+        if not ok:
+            return err
+        # Validate color against printer type
+        if asset_id is not None and color is not None and color != "black":
+            ok, err = _validate_toner_color_for_printer(conn, asset_id, color)
+            if not ok:
+                return err
+
+        # Auto-generate name if not provided: "打印机名 - 颜色"
+        name = data.get("name", "").strip()
+        if not name:
+            printer_row = conn.execute("SELECT name FROM asset WHERE id = ?", (asset_id,)).fetchone() if asset_id else None
+            printer_name = printer_row["name"] if printer_row else "未知打印机"
+            color_label = _TONER_COLOR_LABELS.get(color, color or "未知")
+            name = f"{printer_name} - {color_label}"
+
+        cursor = conn.execute(
+            """INSERT INTO printer_consumable
+               (name, type, stock, threshold, asset_id, unit, color, model, current_price, installed_at, notes)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                name, ctype,
+                stock if stock is not None else 0, threshold if threshold is not None else 0,
+                asset_id, data.get("unit", "个"),
+                color, data.get("model"), price if price is not None else data.get("current_price"),
+                data.get("installed_at"), data.get("notes"),
+            ),
+        )
+        cid = cursor.lastrowid
+        log_activity(conn, user["id"], "create_consumable", "consumable", cid,
+                     f"创建耗材 {name}")
+        row = conn.execute(
+            """SELECT pc.*, a.asset_tag as printer_tag, a.name as printer_name
+               FROM printer_consumable pc
+               LEFT JOIN asset a ON pc.asset_id = a.id
+               WHERE pc.id = ?""", (cid,),
+        ).fetchone()
+    return jsonify(_consumable_usage_fields(row)), 201
+
+
+@app.route("/api/consumables/<int:consumable_id>", methods=["GET"])
+def api_consumables_get(consumable_id):
+    user = require_role("admin")
+    if not user:
+        return jsonify({"error": "权限不足"}), 403
+    db = get_db()
+    with db.get_conn() as conn:
+        row = conn.execute(
+            """SELECT pc.*, a.asset_tag as printer_tag, a.name as printer_name
+               FROM printer_consumable pc
+               LEFT JOIN asset a ON pc.asset_id = a.id
+               WHERE pc.id = ?""", (consumable_id,),
+        ).fetchone()
+        if not row:
+            return jsonify({"error": "耗材不存在"}), 404
+    return jsonify(_consumable_usage_fields(row))
+
+
+@app.route("/api/consumables/<int:consumable_id>", methods=["PUT"])
+def api_consumables_update(consumable_id):
+    user = require_role("admin")
+    if not user:
+        return jsonify({"error": "权限不足"}), 403
+    data = request.get_json() or {}
+
+    # Validate type if provided — only toner allowed
+    if "type" in data and data["type"] != "toner":
+        return jsonify({"error": f"墨粉管理只支持 toner 类型，收到: {data['type']}"}), 400
+
+    # Validate model if provided
+    if "model" in data and data["model"] is not None and data["model"] not in VALID_TONER_MODELS:
+        return jsonify({"error": f"无效的墨粉型号: {data['model']}，可选: {', '.join(VALID_TONER_MODELS)}"}), 400
+
+    # Validate color if provided
+    if "color" in data and data["color"] is not None and data["color"] not in VALID_TONER_COLORS:
+        return jsonify({"error": f"无效的墨粉颜色: {data['color']}，可选: {', '.join(VALID_TONER_COLORS)}"}), 400
+
+    # Validate numeric fields
+    for field in ["stock", "threshold"]:
+        if field in data:
+            val, err = _validate_non_negative_int(data, field)
+            if err:
+                return err
+    if "current_price" in data:
+        val, err = _validate_non_negative_number(data, "current_price")
+        if err:
+            return err
+    if "installed_at" in data:
+        _, date_err = _parse_iso_date(data["installed_at"], "installed_at")
+        if date_err:
+            return date_err
+
+    db = get_db()
+    with db.get_conn() as conn:
+        row = conn.execute("SELECT * FROM printer_consumable WHERE id = ?", (consumable_id,)).fetchone()
+        if not row:
+            return jsonify({"error": "耗材不存在"}), 404
+
+        # Validate asset_id if provided
+        if "asset_id" in data:
+            ok, err = _validate_printer_asset_id(conn, data["asset_id"])
+            if not ok:
+                return err
+
+        # Validate color against printer type (for updates that change color)
+        if "color" in data and data["color"] is not None and data["color"] != "black":
+            effective_asset_id = data.get("asset_id", dict(row).get("asset_id"))
+            if effective_asset_id is not None:
+                ok, err = _validate_toner_color_for_printer(conn, effective_asset_id, data["color"])
+                if not ok:
+                    return err
+
+        fields = []
+        params = []
+        for col in ["name", "type", "stock", "threshold", "asset_id", "unit", "color", "model", "current_price", "installed_at", "notes"]:
+            if col in data:
+                fields.append(f"{col} = ?")
+                params.append(data[col])
+        if fields:
+            conn.execute(
+                f"UPDATE printer_consumable SET {', '.join(fields)} WHERE id = ?",
+                params + [consumable_id],
+            )
+            log_activity(conn, user["id"], "update_consumable", "consumable", consumable_id,
+                         f"更新字段: {', '.join(fields)}")
+        row = conn.execute(
+            """SELECT pc.*, a.asset_tag as printer_tag, a.name as printer_name
+               FROM printer_consumable pc
+               LEFT JOIN asset a ON pc.asset_id = a.id
+               WHERE pc.id = ?""", (consumable_id,),
+        ).fetchone()
+    return jsonify(_consumable_usage_fields(row))
+
+
+@app.route("/api/consumables/<int:consumable_id>", methods=["DELETE"])
+def api_consumables_delete(consumable_id):
+    user = require_role("admin")
+    if not user:
+        return jsonify({"error": "权限不足"}), 403
+    db = get_db()
+    with db.get_conn() as conn:
+        row = conn.execute("SELECT * FROM printer_consumable WHERE id = ?", (consumable_id,)).fetchone()
+        if not row:
+            return jsonify({"error": "耗材不存在"}), 404
+        log_activity(conn, user["id"], "delete_consumable", "consumable", consumable_id,
+                     f"删除耗材 {dict(row)['name']}")
+        conn.execute("DELETE FROM printer_consumable WHERE id = ?", (consumable_id,))
+    return jsonify({"ok": True})
+
+
+@app.route("/api/consumables/<int:consumable_id>/adjust", methods=["POST"])
+def api_consumables_adjust(consumable_id):
+    """库存调整：delta 正数加库存，负数减库存"""
+    user = require_role("admin")
+    if not user:
+        return jsonify({"error": "权限不足"}), 403
+    data = request.get_json() or {}
+    delta = data.get("delta")
+    if delta is None or not isinstance(delta, int):
+        return jsonify({"error": "delta 必须是整数"}), 400
+    db = get_db()
+    with db.get_conn() as conn:
+        row = conn.execute("SELECT * FROM printer_consumable WHERE id = ?", (consumable_id,)).fetchone()
+        if not row:
+            return jsonify({"error": "耗材不存在"}), 404
+        new_stock = dict(row)["stock"] + delta
+        if new_stock < 0:
+            return jsonify({"error": "库存不能低于 0"}), 400
+        conn.execute(
+            "UPDATE printer_consumable SET stock = ? WHERE id = ?",
+            (new_stock, consumable_id),
+        )
+        log_activity(conn, user["id"], "adjust_stock", "consumable", consumable_id,
+                     f"库存调整: {dict(row)['stock']} -> {new_stock} (delta={delta})")
+        row = conn.execute(
+            """SELECT pc.*, a.asset_tag as printer_tag, a.name as printer_name
+               FROM printer_consumable pc
+               LEFT JOIN asset a ON pc.asset_id = a.id
+               WHERE pc.id = ?""", (consumable_id,),
+        ).fetchone()
+    return jsonify(_consumable_usage_fields(row))
+
+
+@app.route("/api/consumables/<int:consumable_id>/replace", methods=["POST"])
+def api_consumables_replace(consumable_id):
+    """更替当前耗材：归档旧周期，重置当前价格/安装日期，可选扣减备用库存。"""
+    user = require_role("admin")
+    if not user:
+        return jsonify({"error": "权限不足"}), 403
+    data = request.get_json() or {}
+    replaced_at = data.get("replaced_at") or date.today().isoformat()
+    new_installed_at = data.get("new_installed_at") or replaced_at
+    replaced_date, error = _parse_iso_date(replaced_at, "replaced_at")
+    if error:
+        return error
+    new_installed_date, error = _parse_iso_date(new_installed_at, "new_installed_at")
+    if error:
+        return error
+
+    # Validate new_price if provided
+    new_price_raw = data.get("new_price")
+    if new_price_raw is not None:
+        new_price_val, price_err = _validate_non_negative_number(data, "new_price")
+        if price_err:
+            return price_err
+
+    db = get_db()
+    with db.get_conn() as conn:
+        row = conn.execute("SELECT * FROM printer_consumable WHERE id = ?", (consumable_id,)).fetchone()
+        if not row:
+            return jsonify({"error": "耗材不存在"}), 404
+        consumable = dict(row)
+        if data.get("use_stock") and consumable["stock"] <= 0:
+            return jsonify({"error": "备用库存不足，不能从库存取用"}), 400
+
+        old_installed_at = consumable.get("installed_at")
+        old_installed_date, error = _parse_iso_date(old_installed_at, "installed_at")
+        if error:
+            return error
+        usage_days = 1
+        if old_installed_date:
+            usage_days = max((replaced_date - old_installed_date).days, 1)
+        price = consumable.get("current_price")
+        daily_cost = round(float(price) / usage_days, 2) if price is not None else None
+        new_price = data.get("new_price")
+        new_stock = consumable["stock"] - 1 if data.get("use_stock") else consumable["stock"]
+
+        cursor = conn.execute(
+            """INSERT INTO consumable_replacement
+               (consumable_id, asset_id_snapshot, consumable_name_snapshot,
+                old_installed_at, replaced_at, usage_days, price, daily_cost,
+                new_installed_at, new_price, reason, notes)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                consumable_id, consumable.get("asset_id"), consumable.get("name"),
+                old_installed_at, replaced_at, usage_days, price, daily_cost,
+                new_installed_at, new_price, data.get("reason"), data.get("notes"),
+            ),
+        )
+        replacement_id = cursor.lastrowid
+        conn.execute(
+            """UPDATE printer_consumable
+               SET installed_at = ?, current_price = ?, stock = ?
+               WHERE id = ?""",
+            (new_installed_date.isoformat(), new_price, new_stock, consumable_id),
+        )
+        log_activity(conn, user["id"], "replace_consumable", "consumable", consumable_id,
+                     f"更替耗材 {consumable.get('name')}，旧周期 {usage_days} 天")
+        replacement = conn.execute(
+            "SELECT * FROM consumable_replacement WHERE id = ?", (replacement_id,)
+        ).fetchone()
+        updated = _select_consumable_with_printer(conn, consumable_id)
+    return jsonify({
+        "replacement": dict(replacement),
+        "consumable": _consumable_usage_fields(updated),
+    })
+
+
+@app.route("/api/consumables/<int:consumable_id>/replacements", methods=["GET"])
+def api_consumables_replacements(consumable_id):
+    user = require_role("admin")
+    if not user:
+        return jsonify({"error": "权限不足"}), 403
+    db = get_db()
+    with db.get_conn() as conn:
+        row = conn.execute("SELECT id FROM printer_consumable WHERE id = ?", (consumable_id,)).fetchone()
+        if not row:
+            return jsonify({"error": "耗材不存在"}), 404
+        rows = conn.execute(
+            """SELECT * FROM consumable_replacement
+               WHERE consumable_id = ? ORDER BY replaced_at DESC, id DESC""",
+            (consumable_id,),
+        ).fetchall()
+    replacements = [dict(r) for r in rows]
+    return jsonify({"total": len(replacements), "replacements": replacements})
+
+
+@app.route("/api/consumables/replacements", methods=["GET"])
+def api_all_replacements():
+    """全局更换历史，支持按打印机/颜色/日期范围筛选和分页。"""
+    user = require_role("admin")
+    if not user:
+        return jsonify({"error": "权限不足"}), 403
+
+    page, err = _parse_positive_int_arg("page", 1)
+    if err:
+        return err
+    per_page, err = _parse_positive_int_arg("per_page", 20, max_value=200)
+    if err:
+        return err
+
+    printer_id_raw = request.args.get("printer_id")
+    printer_id = int(printer_id_raw) if printer_id_raw else None
+    color = request.args.get("color")
+    date_from = request.args.get("date_from")
+    date_to = request.args.get("date_to")
+
+    if color and color not in VALID_TONER_COLORS:
+        return jsonify({"error": f"无效颜色: {color}"}), 400
+
+    where_clauses = []
+    params = []
+    if printer_id:
+        where_clauses.append("pc.asset_id = ?")
+        params.append(printer_id)
+    if color:
+        where_clauses.append("pc.color = ?")
+        params.append(color)
+    if date_from:
+        where_clauses.append("cr.replaced_at >= ?")
+        params.append(date_from)
+    if date_to:
+        where_clauses.append("cr.replaced_at <= ?")
+        params.append(date_to)
+
+    where = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
+    db = get_db()
+    with db.get_conn() as conn:
+        total = conn.execute(
+            f"SELECT COUNT(*) as c FROM consumable_replacement cr JOIN printer_consumable pc ON cr.consumable_id = pc.id{where}",
+            params,
+        ).fetchone()["c"]
+        rows = conn.execute(
+            f"""SELECT cr.*, pc.color as toner_color, pc.asset_id,
+                a.name as printer_name, a.asset_tag as printer_tag
+                FROM consumable_replacement cr
+                JOIN printer_consumable pc ON cr.consumable_id = pc.id
+                LEFT JOIN asset a ON pc.asset_id = a.id
+                {where}
+                ORDER BY cr.replaced_at DESC, cr.id DESC
+                LIMIT ? OFFSET ?""",
+            params + [per_page, (page - 1) * per_page],
+        ).fetchall()
+    replacements = [dict(r) for r in rows]
+    return jsonify({"total": total, "page": page, "per_page": per_page, "replacements": replacements})
+
+
+@app.route("/api/consumables/cost-summary", methods=["GET"])
+def api_cost_summary():
+    """耗材成本汇总：总花费、更换次数、按打印机明细、按月趋势。"""
+    user = require_role("admin")
+    if not user:
+        return jsonify({"error": "权限不足"}), 403
+
+    db = get_db()
+    with db.get_conn() as conn:
+        # Overall totals
+        agg = conn.execute("""
+            SELECT COUNT(*) as total_replacements,
+                   COALESCE(SUM(price), 0) as total_cost,
+                   COALESCE(SUM(price) * 1.0 / NULLIF(SUM(usage_days), 0), 0) as avg_daily_cost
+            FROM consumable_replacement
+        """).fetchone()
+
+        # By printer
+        by_printer_rows = conn.execute("""
+            SELECT a.id as printer_id, a.name as printer_name, a.asset_tag,
+                   COUNT(*) as replacement_count,
+                   COALESCE(SUM(cr.price), 0) as total_cost,
+                   COALESCE(SUM(cr.price) * 1.0 / NULLIF(SUM(cr.usage_days), 0), 0) as avg_daily_cost
+            FROM consumable_replacement cr
+            JOIN printer_consumable pc ON cr.consumable_id = pc.id
+            LEFT JOIN asset a ON pc.asset_id = a.id
+            GROUP BY a.id
+            ORDER BY total_cost DESC
+        """).fetchall()
+
+        # Monthly trend (last 12 months)
+        monthly_rows = conn.execute("""
+            SELECT strftime('%Y-%m', replaced_at) as month,
+                   COUNT(*) as count,
+                   COALESCE(SUM(price), 0) as cost
+            FROM consumable_replacement
+            WHERE replaced_at >= date('now', '-12 months')
+            GROUP BY strftime('%Y-%m', replaced_at)
+            ORDER BY month
+        """).fetchall()
+
+    return jsonify({
+        "total_cost": round(agg["total_cost"], 2),
+        "total_replacements": agg["total_replacements"],
+        "avg_daily_cost": round(agg["avg_daily_cost"], 2),
+        "by_printer": [dict(r) for r in by_printer_rows],
+        "monthly": [dict(r) for r in monthly_rows],
+    })
+
+
+# ---- API: 打印机耗材聚合 (printer-centric view) ----
+
+# Brand/model keywords that identify label printers
+_LABEL_PRINTER_KEYWORDS = ("label", "标签", "zebra", "argox", "tsc", "godex", "saturn", "postek", "cab", "honeywell", "datamax", "sato", "intermec", "pronto")
+
+_TONER_COLOR_LABELS = {"black": "黑色", "cyan": "青色", "magenta": "品红", "yellow": "黄色"}
+
+
+def _is_label_printer(name, brand, model):
+    """Heuristic: detect label printers by brand/model/name keywords."""
+    text = " ".join(filter(None, [name, brand, model])).lower()
+    return any(kw in text for kw in _LABEL_PRINTER_KEYWORDS)
+
+
+def _get_printer_type(conn, asset_id, consumables_rows=None):
+    """Get printer type from explicit asset.printer_type, falling back to inference from consumables."""
+    row = conn.execute("SELECT printer_type FROM asset WHERE id = ?", (asset_id,)).fetchone()
+    if row and row["printer_type"] in VALID_PRINTER_TYPES:
+        return row["printer_type"]
+    # Fallback: infer from existing toner slots
+    if consumables_rows is not None:
+        return _infer_printer_type(consumables_rows)
+    return "unconfigured"
+
+
+def _validate_toner_color_for_printer(conn, asset_id, color):
+    """Validate that color toner is allowed for this printer.
+    Returns (ok, error_response)."""
+    printer_type = _get_printer_type(conn, asset_id)
+    if printer_type == "mono":
+        return False, (jsonify({"error": "黑白打印机不允许彩色墨粉"}), 400)
+    # color or unconfigured: allow (unconfigured defaults to allowing black only in UI,
+    # but API lets it through since the user might be setting up a color printer)
+    return True, None
+
+
+def _infer_printer_type(consumables_rows):
+    """Infer color/mono from the colors of consumables associated with a printer."""
+    if not consumables_rows:
+        return "unconfigured"
+    colors = {c.get("color") for c in consumables_rows if c.get("color")}
+    if colors & {"cyan", "magenta", "yellow"}:
+        return "color"
+    return "mono"
+
+
+@app.route("/api/printers/consumables", methods=["GET"])
+def api_printers_consumables():
+    """打印机耗材聚合视图：按打印机分组返回耗材数据，排除标签打印机。
+
+    Query params:
+      printer_type: "color" | "mono" — 按打印机类型筛选
+      warning: "1" — 仅返回有低库存告警的打印机
+    """
+    user = require_role("admin")
+    if not user:
+        return jsonify({"error": "权限不足"}), 403
+
+    printer_type_filter = request.args.get("printer_type")
+    warning_only = request.args.get("warning") == "1"
+
+    db = get_db()
+    with db.get_conn() as conn:
+        # Get all printers with their consumables (toner only)
+        rows = conn.execute("""
+            SELECT a.id as asset_id, a.asset_tag, a.name as printer_name,
+                   a.brand, a.model, a.printer_type,
+                   pc.id as c_id, pc.name as c_name, pc.type as c_type,
+                   pc.stock as c_stock, pc.threshold as c_threshold,
+                   pc.color as c_color, pc.model as c_model,
+                   pc.current_price as c_current_price,
+                   pc.installed_at as c_installed_at,
+                   pc.unit as c_unit, pc.notes as c_notes
+            FROM asset a
+            LEFT JOIN printer_consumable pc ON pc.asset_id = a.id AND pc.type = 'toner'
+            WHERE a.category = 'printer'
+            ORDER BY a.id, pc.id
+        """).fetchall()
+
+        # Group by printer
+        printers_map = {}
+        for r in rows:
+            aid = r["asset_id"]
+            if aid not in printers_map:
+                printers_map[aid] = {
+                    "asset_id": aid,
+                    "asset_tag": r["asset_tag"],
+                    "printer_name": r["printer_name"],
+                    "brand": r["brand"],
+                    "model": r["model"],
+                    "printer_type_db": r["printer_type"],
+                    "_consumables_raw": [],
+                }
+            if r["c_id"] is not None:
+                printers_map[aid]["_consumables_raw"].append({
+                    "id": r["c_id"],
+                    "name": r["c_name"],
+                    "type": r["c_type"],
+                    "stock": r["c_stock"],
+                    "threshold": r["c_threshold"],
+                    "color": r["c_color"],
+                    "model": r["c_model"],
+                    "current_price": r["c_current_price"],
+                    "installed_at": r["c_installed_at"],
+                    "unit": r["c_unit"],
+                    "notes": r["c_notes"],
+                })
+
+        # Build final printer list
+        printers = []
+        for p in printers_map.values():
+            # Skip label printers
+            if _is_label_printer(p["printer_name"], p["brand"], p["model"]):
+                continue
+
+            raw_consumables = p["_consumables_raw"]
+            # Use explicit printer_type if set, otherwise infer from consumables
+            explicit_pt = p.get("printer_type_db")
+            if explicit_pt in VALID_PRINTER_TYPES:
+                printer_type = explicit_pt
+            else:
+                printer_type = _infer_printer_type(raw_consumables)
+
+            # Apply printer_type filter
+            if printer_type_filter and printer_type != printer_type_filter:
+                continue
+
+            # Build enriched consumable slots
+            slots = []
+            low_stock_count = 0
+            total_replacements = 0
+            for c in raw_consumables:
+                enriched = _consumable_usage_fields({
+                    "id": c["id"], "name": c["name"], "type": c["type"],
+                    "stock": c["stock"], "threshold": c["threshold"],
+                    "color": c["color"], "model": c["model"],
+                    "current_price": c["current_price"],
+                    "installed_at": c["installed_at"],
+                    "unit": c["unit"], "notes": c["notes"],
+                    "asset_id": p["asset_id"],
+                    "printer_tag": p["asset_tag"],
+                    "printer_name": p["printer_name"],
+                })
+                is_low = c["stock"] <= c["threshold"] and c["threshold"] > 0
+                enriched["is_low_stock"] = is_low
+                if is_low:
+                    low_stock_count += 1
+
+                # Get recent replacements for this consumable
+                recent = conn.execute(
+                    """SELECT * FROM consumable_replacement
+                       WHERE consumable_id = ? ORDER BY replaced_at DESC LIMIT 5""",
+                    (c["id"],),
+                ).fetchall()
+                enriched["recent_replacements"] = [dict(r) for r in recent]
+                total_replacements += len(recent)
+
+                slots.append(enriched)
+
+            has_warning = low_stock_count > 0
+
+            # Apply warning filter
+            if warning_only and not has_warning:
+                continue
+
+            printers.append({
+                "asset_id": p["asset_id"],
+                "asset_tag": p["asset_tag"],
+                "printer_name": p["printer_name"],
+                "printer_type": printer_type,
+                "brand": p["brand"],
+                "model": p["model"],
+                "consumables": slots,
+                "has_warning": has_warning,
+                "total_slots": len(slots),
+                "low_stock_count": low_stock_count,
+                "recent_replacement_count": total_replacements,
+            })
+
+    return jsonify({"printers": printers})
+
+
+# ---- API: 管理员用户管理 ----
+
+@app.route("/api/users", methods=["GET"])
+def api_users():
+    user = require_role("admin")
+    if not user:
+        return jsonify({"error": "权限不足"}), 403
+    db = get_db()
+    with db.get_conn() as conn:
+        rows = conn.execute(
+            'SELECT id, employee_id, name, department, phone, email, role, created_at FROM "user" ORDER BY name'
+        ).fetchall()
+    return jsonify({"users": [dict(r) for r in rows]})
+
+
+@app.route("/api/users", methods=["POST"])
+def api_users_create():
+    user = require_role("admin")
+    if not user:
+        return jsonify({"error": "权限不足"}), 403
+    data = request.get_json() or {}
+    for field in ["employee_id", "name", "password"]:
+        if not data.get(field):
+            return jsonify({"error": f"缺少必填字段: {field}"}), 400
+    role = data.get("role", "employee")
+    if role not in VALID_ROLES:
+        return jsonify({"error": f"无效角色: {role}"}), 400
+
+    from werkzeug.security import generate_password_hash
+    password_hash = generate_password_hash(data["password"])
+
+    db = get_db()
+    try:
+        with db.get_conn() as conn:
+            cursor = conn.execute(
+                """INSERT INTO "user" (employee_id, name, department, phone, email, role, password_hash)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    data["employee_id"], data["name"],
+                    data.get("department"), data.get("phone"),
+                    data.get("email"), role, password_hash,
+                ),
+            )
+            uid = cursor.lastrowid
+            log_activity(conn, user["id"], "create_user", "user", uid,
+                         f"创建用户 {data['employee_id']}")
+            row = conn.execute(
+                'SELECT id, employee_id, name, department, phone, email, role, created_at FROM "user" WHERE id = ?',
+                (uid,),
+            ).fetchone()
+    except Exception as e:
+        if "UNIQUE constraint" in str(e):
+            return jsonify({"error": f"工号已存在: {data['employee_id']}"}), 400
+        raise
+    return jsonify(dict(row)), 201
+
+
+@app.route("/api/users/<int:user_id>", methods=["GET"])
+def api_users_get(user_id):
+    admin = require_role("admin")
+    if not admin:
+        return jsonify({"error": "权限不足"}), 403
+    db = get_db()
+    with db.get_conn() as conn:
+        row = conn.execute(
+            'SELECT id, employee_id, name, department, phone, email, role, created_at FROM "user" WHERE id = ?',
+            (user_id,),
+        ).fetchone()
+        if not row:
+            return jsonify({"error": "用户不存在"}), 404
+    return jsonify(dict(row))
+
+
+@app.route("/api/users/<int:user_id>", methods=["PUT"])
+def api_users_update(user_id):
+    admin = require_role("admin")
+    if not admin:
+        return jsonify({"error": "权限不足"}), 403
+    data = request.get_json() or {}
+    if "role" in data and data["role"] not in VALID_ROLES:
+        return jsonify({"error": f"无效角色: {data['role']}"}), 400
+    db = get_db()
+    with db.get_conn() as conn:
+        row = conn.execute('SELECT * FROM "user" WHERE id = ?', (user_id,)).fetchone()
+        if not row:
+            return jsonify({"error": "用户不存在"}), 404
+
+        # Admin lockout protection: prevent downgrading last admin or self
+        if "role" in data and data["role"] != "admin":
+            target = dict(row)
+            if target.get("role") == "admin":
+                # Check if this is self-downgrade
+                if user_id == admin["id"]:
+                    return jsonify({"error": "不能降低自己的管理员角色"}), 400
+                # Check if this is the last admin
+                admin_count = conn.execute(
+                    'SELECT COUNT(*) as c FROM "user" WHERE role = "admin"'
+                ).fetchone()["c"]
+                if admin_count <= 1:
+                    return jsonify({"error": "不能降级系统最后一个管理员"}), 400
+
+        fields = []
+        params = []
+        for col in ["name", "department", "phone", "email", "role"]:
+            if col in data:
+                fields.append(f"{col} = ?")
+                params.append(data[col])
+        if fields:
+            conn.execute(
+                f'UPDATE "user" SET {", ".join(fields)} WHERE id = ?',
+                params + [user_id],
+            )
+            log_activity(conn, admin["id"], "update_user", "user", user_id,
+                         f"更新字段: {', '.join(fields)}")
+        row = conn.execute(
+            'SELECT id, employee_id, name, department, phone, email, role, created_at FROM "user" WHERE id = ?',
+            (user_id,),
+        ).fetchone()
+    return jsonify(dict(row))
+
+
+@app.route("/api/users/<int:user_id>/reset-password", methods=["POST"])
+def api_users_reset_password(user_id):
+    admin = require_role("admin")
+    if not admin:
+        return jsonify({"error": "权限不足"}), 403
+    data = request.get_json() or {}
+    new_password = data.get("new_password", "")
+    if not new_password:
+        return jsonify({"error": "密码不能为空"}), 400
+
+    from werkzeug.security import generate_password_hash
+    password_hash = generate_password_hash(new_password)
+
+    db = get_db()
+    with db.get_conn() as conn:
+        row = conn.execute('SELECT * FROM "user" WHERE id = ?', (user_id,)).fetchone()
+        if not row:
+            return jsonify({"error": "用户不存在"}), 404
+        conn.execute(
+            'UPDATE "user" SET password_hash = ? WHERE id = ?',
+            (password_hash, user_id),
+        )
+        log_activity(conn, admin["id"], "reset_password", "user", user_id,
+                     f"重置用户 {dict(row)['employee_id']} 密码")
+    return jsonify({"ok": True})
+
+
+@app.route("/api/users/<int:user_id>", methods=["DELETE"])
+def api_users_delete(user_id):
+    admin = require_role("admin")
+    if not admin:
+        return jsonify({"error": "权限不足"}), 403
+    db = get_db()
+    with db.get_conn() as conn:
+        row = conn.execute('SELECT * FROM "user" WHERE id = ?', (user_id,)).fetchone()
+        if not row:
+            return jsonify({"error": "用户不存在"}), 404
+        target = dict(row)
+        is_self = user_id == admin["id"]
+        is_last_admin = False
+        if target.get("role") == "admin":
+            admin_count = conn.execute(
+                'SELECT COUNT(*) as c FROM "user" WHERE role = "admin"'
+            ).fetchone()["c"]
+            if admin_count <= 1:
+                is_last_admin = True
+        if is_self and is_last_admin:
+            return jsonify({"error": "不能删除自己（也是系统最后一个管理员）"}), 400
+        if is_last_admin:
+            return jsonify({"error": "不能删除系统最后一个管理员"}), 400
+        if is_self:
+            return jsonify({"error": "不能删除自己"}), 400
+        # 检查是否有未归还的资产
+        assigned = conn.execute(
+            "SELECT COUNT(*) as c FROM asset WHERE current_holder_id = ?", (user_id,)
+        ).fetchone()["c"]
+        if assigned > 0:
+            return jsonify({"error": f"该用户持有 {assigned} 件资产，请先归还后再删除"}), 400
+        log_activity(conn, admin["id"], "delete_user", "user", user_id,
+                     f"删除用户 {dict(row)['employee_id']}")
+        conn.execute('DELETE FROM "user" WHERE id = ?', (user_id,))
+    return jsonify({"ok": True})
 
 
 if __name__ == "__main__":

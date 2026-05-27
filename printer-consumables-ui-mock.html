@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>打印机耗材管理 UI 设计稿</title>
+  <style>
+    :root{
+      --bg:#f4f7fb; --panel:#ffffff; --panel-2:#f8fafc; --line:#dbe3ee;
+      --text:#1f2a37; --muted:#64748b; --blue:#2563eb; --blue-2:#dbeafe;
+      --green:#16a34a; --amber:#f59e0b; --red:#ef4444; --shadow:0 10px 30px rgba(15,23,42,.08);
+      --radius:18px;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;background:linear-gradient(180deg,#eef4fb, #f6f8fb 40%, #f4f7fb);color:var(--text)}
+    .wrap{max-width:1600px;margin:0 auto;padding:28px}
+    .header{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
+    .title h1{margin:0;font-size:28px;letter-spacing:.2px}
+    .title p{margin:8px 0 0;color:var(--muted);font-size:14px}
+    .chips{display:flex;gap:10px;flex-wrap:wrap}
+    .chip{padding:10px 14px;border:1px solid var(--line);border-radius:999px;background:#fff;color:#334155;font-size:13px;box-shadow:0 2px 8px rgba(15,23,42,.04)}
+    .chip.active{background:var(--blue);color:#fff;border-color:var(--blue)}
+    .grid{display:grid;grid-template-columns:1.05fr .95fr;gap:18px;align-items:start}
+    .panel{background:var(--panel);border:1px solid rgba(219,227,238,.9);border-radius:24px;box-shadow:var(--shadow);overflow:hidden}
+    .panel-head{padding:18px 20px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;background:linear-gradient(180deg,#fff, #fbfcfe)}
+    .panel-head h2{margin:0;font-size:18px}
+    .panel-head small{color:var(--muted)}
+    .subbar{padding:16px 20px;border-bottom:1px solid var(--line);background:#fbfdff;display:flex;gap:10px;flex-wrap:wrap}
+    .search{margin-left:auto;min-width:240px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 12px;color:var(--muted)}
+    .cards{padding:18px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+    .device{border:1px solid var(--line);border-radius:20px;background:linear-gradient(180deg,#fff,#f9fbff);padding:16px;min-height:155px;display:flex;flex-direction:column;gap:12px;position:relative}
+    .device.highlight{outline:2px solid rgba(37,99,235,.15);box-shadow:0 12px 26px rgba(37,99,235,.08)}
+    .row{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+    .device h3{margin:0;font-size:16px}
+    .meta{color:var(--muted);font-size:13px;line-height:1.45}
+    .tag{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;font-size:12px;font-weight:600}
+    .tag.blue{background:var(--blue-2);color:var(--blue)}
+    .tag.gray{background:#eef2f7;color:#475569}
+    .tag.green{background:#dcfce7;color:var(--green)}
+    .tag.amber{background:#ffedd5;color:#c2410c}
+    .status{margin-top:auto;display:flex;justify-content:space-between;align-items:end;gap:10px}
+    .status .warn{font-size:12px;color:#b45309;font-weight:600}
+    .status .ok{font-size:12px;color:#166534;font-weight:600}
+    .device .btn{align-self:flex-start;padding:9px 12px;border:none;border-radius:12px;background:var(--blue);color:#fff;font-weight:600;font-size:13px}
+
+    .detail{padding:18px}
+    .printer-banner{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:18px;border-radius:18px;background:linear-gradient(135deg,#eff6ff,#f8fbff);border:1px solid #dbeafe;margin-bottom:16px}
+    .printer-banner h3{margin:0 0 6px;font-size:20px}
+    .printer-banner p{margin:0;color:var(--muted);font-size:13px}
+    .summary{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+    .summary .box{background:#fff;border:1px solid var(--line);border-radius:14px;padding:10px 12px;min-width:110px;text-align:center}
+    .summary .num{font-size:18px;font-weight:700}
+    .summary .lab{font-size:12px;color:var(--muted);margin-top:3px}
+    .slots{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+    .slot{border:1px solid var(--line);border-radius:18px;background:#fff;padding:14px;display:flex;flex-direction:column;gap:10px}
+    .slot-head{display:flex;justify-content:space-between;align-items:center;gap:10px}
+    .slot h4{margin:0;font-size:16px}
+    .slot p{margin:0;color:var(--muted);font-size:13px;line-height:1.5}
+    .stat-row{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+    .stat{padding:10px;border-radius:12px;background:var(--panel-2);border:1px solid #e5edf7;text-align:center}
+    .stat .v{font-size:16px;font-weight:700}
+    .stat .k{font-size:11px;color:var(--muted);margin-top:4px}
+    .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:2px}
+    .action{padding:9px 12px;border-radius:12px;border:1px solid var(--line);background:#fff;font-size:13px;font-weight:600;color:#334155}
+    .action.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+    .timeline{margin-top:16px;border-top:1px dashed #d9e4f0;padding-top:16px}
+    .timeline h4{margin:0 0 12px;font-size:16px}
+    .item{display:grid;grid-template-columns:18px 1fr auto;gap:10px;align-items:start;padding:10px 0;border-bottom:1px solid #f1f5f9}
+    .dot{width:12px;height:12px;border-radius:999px;background:var(--blue);margin-top:5px}
+    .item:last-child{border-bottom:none}
+    .item .desc{font-size:13px;color:#334155}
+    .item .time{font-size:12px;color:var(--muted)}
+    .footer-note{margin-top:14px;color:var(--muted);font-size:12px}
+    .legend{display:flex;gap:10px;flex-wrap:wrap}
+    .legend span{font-size:12px;color:#475569;padding:6px 10px;border-radius:999px;background:#f8fafc;border:1px solid var(--line)}
+    .printer-type{display:flex;gap:8px;flex-wrap:wrap}
+    .pager{display:flex;gap:8px;align-items:center;color:var(--muted);font-size:12px}
+    .pager strong{color:#1e293b}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <div class="title">
+        <h1>打印机耗材管理</h1>
+        <p>以打印机为主入口 · 彩色机 / 黑白机分流 · 标签打印机不纳入耗材管理</p>
+      </div>
+      <div class="chips">
+        <div class="chip active">全部打印机</div>
+        <div class="chip">彩色打印机</div>
+        <div class="chip">黑白打印机</div>
+        <div class="chip">告警中</div>
+      </div>
+    </div>
+
+    <div class="grid">
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>打印机卡片总页</h2>
+            <small>点击任一卡片进入该打印机的耗材详情</small>
+          </div>
+          <div class="pager"><strong>12</strong> 台打印机 · <strong>8</strong> 台启用耗材管理</div>
+        </div>
+        <div class="subbar">
+          <div class="legend">
+            <span>只管理彩色打印机</span>
+            <span>只管理黑白打印机</span>
+            <span>不显示标签打印机</span>
+          </div>
+          <div class="search">搜索打印机名称 / 资产编号</div>
+        </div>
+        <div class="cards">
+          <div class="device highlight">
+            <div class="row">
+              <div>
+                <h3>HP Color LaserJet M479</h3>
+                <div class="meta">资产编号：PRN-2026-0007<br>类型：彩色打印机</div>
+              </div>
+              <span class="tag blue">彩色</span>
+            </div>
+            <div class="status">
+              <div>
+                <div class="warn">黄色耗材低于阈值：12%</div>
+                <div class="meta">当前槽位：黑 / 青 / 品红 / 黄</div>
+              </div>
+              <button class="btn">查看详情</button>
+            </div>
+          </div>
+
+          <div class="device">
+            <div class="row">
+              <div>
+                <h3>Brother HL-L2325D</h3>
+                <div class="meta">资产编号：PRN-2026-0012<br>类型：黑白打印机</div>
+              </div>
+              <span class="tag gray">黑白</span>
+            </div>
+            <div class="status">
+              <div>
+                <div class="ok">黑色耗材正常</div>
+                <div class="meta">当前槽位：黑</div>
+              </div>
+              <button class="btn">查看详情</button>
+            </div>
+          </div>
+
+          <div class="device">
+            <div class="row">
+              <div>
+                <h3>Canon iR ADV C3530</h3>
+                <div class="meta">资产编号：PRN-2026-0015<br>类型：彩色打印机</div>
+              </div>
+              <span class="tag green">正常</span>
+            </div>
+            <div class="status">
+              <div>
+                <div class="ok">四个槽位均可用</div>
+                <div class="meta">最近更换：3 天前</div>
+              </div>
+              <button class="btn">查看详情</button>
+            </div>
+          </div>
+
+          <div class="device">
+            <div class="row">
+              <div>
+                <h3>Lexmark MS822de</h3>
+                <div class="meta">资产编号：PRN-2026-0021<br>类型：黑白打印机</div>
+              </div>
+              <span class="tag amber">关注</span>
+            </div>
+            <div class="status">
+              <div>
+                <div class="warn">黑色耗材接近阈值：18%</div>
+                <div class="meta">单槽位管理：黑</div>
+              </div>
+              <button class="btn">查看详情</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>打印机详情：HP Color LaserJet M479</h2>
+            <small>这台机器的耗材管理中心</small>
+          </div>
+          <div class="printer-type">
+            <span class="tag blue">彩色打印机</span>
+            <span class="tag gray">资产编号 PRN-2026-0007</span>
+          </div>
+        </div>
+        <div class="detail">
+          <div class="printer-banner">
+            <div>
+              <h3>当前耗材槽位</h3>
+              <p>按打印机组织，不再让用户先选耗材再找打印机</p>
+            </div>
+            <div class="summary">
+              <div class="box"><div class="num">4</div><div class="lab">槽位数量</div></div>
+              <div class="box"><div class="num">1</div><div class="lab">低库存</div></div>
+              <div class="box"><div class="num">9</div><div class="lab">更换记录</div></div>
+            </div>
+          </div>
+
+          <div class="slots">
+            <div class="slot">
+              <div class="slot-head">
+                <h4>黑色 Black</h4>
+                <span class="tag green">正常</span>
+              </div>
+              <p>当前价格 ¥320 · 安装于 2026-05-12 · 最近更换 14 天前</p>
+              <div class="stat-row">
+                <div class="stat"><div class="v">62%</div><div class="k">库存</div></div>
+                <div class="stat"><div class="v">20%</div><div class="k">阈值</div></div>
+                <div class="stat"><div class="v">¥5.12</div><div class="k">日成本</div></div>
+              </div>
+              <div class="actions">
+                <button class="action primary">更换</button>
+                <button class="action">查看历史</button>
+                <button class="action">调整库存</button>
+              </div>
+            </div>
+
+            <div class="slot">
+              <div class="slot-head">
+                <h4>青色 Cyan</h4>
+                <span class="tag blue">正常</span>
+              </div>
+              <p>当前价格 ¥340 · 安装于 2026-05-08 · 最近更换 18 天前</p>
+              <div class="stat-row">
+                <div class="stat"><div class="v">48%</div><div class="k">库存</div></div>
+                <div class="stat"><div class="v">15%</div><div class="k">阈值</div></div>
+                <div class="stat"><div class="v">¥5.68</div><div class="k">日成本</div></div>
+              </div>
+              <div class="actions">
+                <button class="action primary">更换</button>
+                <button class="action">查看历史</button>
+                <button class="action">调整库存</button>
+              </div>
+            </div>
+
+            <div class="slot">
+              <div class="slot-head">
+                <h4>品红 Magenta</h4>
+                <span class="tag blue">正常</span>
+              </div>
+              <p>当前价格 ¥340 · 安装于 2026-05-09 · 最近更换 17 天前</p>
+              <div class="stat-row">
+                <div class="stat"><div class="v">55%</div><div class="k">库存</div></div>
+                <div class="stat"><div class="v">15%</div><div class="k">阈值</div></div>
+                <div class="stat"><div class="v">¥5.68</div><div class="k">日成本</div></div>
+              </div>
+              <div class="actions">
+                <button class="action primary">更换</button>
+                <button class="action">查看历史</button>
+                <button class="action">调整库存</button>
+              </div>
+            </div>
+
+            <div class="slot">
+              <div class="slot-head">
+                <h4>黄色 Yellow</h4>
+                <span class="tag amber">低库存</span>
+              </div>
+              <p>当前价格 ¥350 · 安装于 2026-04-28 · 最近更换 30 天前</p>
+              <div class="stat-row">
+                <div class="stat"><div class="v">12%</div><div class="k">库存</div></div>
+                <div class="stat"><div class="v">15%</div><div class="k">阈值</div></div>
+                <div class="stat"><div class="v">¥7.00</div><div class="k">日成本</div></div>
+              </div>
+              <div class="actions">
+                <button class="action primary">更换</button>
+                <button class="action">查看历史</button>
+                <button class="action">调整库存</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="timeline">
+            <h4>更换历史</h4>
+            <div class="item">
+              <div class="dot"></div>
+              <div class="desc"><strong>黄色 Yellow</strong> 更换为新耗材，旧耗材记录已归档</div>
+              <div class="time">2026-05-12</div>
+            </div>
+            <div class="item">
+              <div class="dot" style="background:var(--amber)"></div>
+              <div class="desc"><strong>青色 Cyan</strong> 库存补充并重置安装日期</div>
+              <div class="time">2026-05-08</div>
+            </div>
+            <div class="item">
+              <div class="dot" style="background:var(--green)"></div>
+              <div class="desc"><strong>黑色 Black</strong> 更换完成，自动计算使用天数与日成本</div>
+              <div class="time">2026-05-01</div>
+            </div>
+          </div>
+
+          <div class="footer-note">
+            设计意图：彩色打印机按四个槽位管理，黑白打印机只保留黑色槽位，标签打印机不进入该模块。
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+</body>
+</html>

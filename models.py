@@ -67,17 +67,23 @@ EVENT_TO_STATUS = {
     "label_print": None,  # 状态不变
 }
 
-# 标签字段可选值
+# 标签字段可选值。asset_tag、数字编号和 QR 是固定打印项，不在这里配置。
 LABEL_FIELD_OPTIONS = {
-    "name": "名称",
-    "serial_number": "序列号",
-    "holder": "持有人",
-    "location": "位置",
-    "brand": "品牌",
-    "model": "型号",
+    "name": {"label": "资产名称", "group": "recommended", "volatile": False},
+    "serial_number": {"label": "序列号", "group": "recommended", "volatile": False},
+    "brand": {"label": "品牌", "group": "optional", "volatile": False},
+    "model": {"label": "型号", "group": "optional", "volatile": False},
+    "holder": {"label": "持有人", "group": "dynamic", "volatile": True},
+    "location": {"label": "位置", "group": "dynamic", "volatile": True},
 }
 
-LABEL_FIELDS_DEFAULT = ["name"]
+LABEL_FIELDS_DEFAULT = ["name", "serial_number"]
+LABEL_FIELDS_MAX = 3
+LABEL_FIXED_FIELDS = [
+    {"key": "asset_tag", "label": "资产标签号"},
+    {"key": "numeric_id", "label": "数字编号"},
+    {"key": "qr", "label": "QR 二维码"},
+]
 
 
 def get_categories_meta():
@@ -127,6 +133,17 @@ class Database:
             cols = [r[1] for r in conn.execute("PRAGMA table_info(asset)").fetchall()]
             if "warranty_date" not in cols:
                 conn.execute("ALTER TABLE asset ADD COLUMN warranty_date DATE")
+            if "printer_type" not in cols:
+                conn.execute("ALTER TABLE asset ADD COLUMN printer_type TEXT")
+            consumable_cols = [r[1] for r in conn.execute("PRAGMA table_info(printer_consumable)").fetchall()]
+            for col_name, col_def in [
+                ("color", "TEXT"),
+                ("model", "TEXT"),
+                ("current_price", "REAL"),
+                ("installed_at", "DATE"),
+            ]:
+                if col_name not in consumable_cols:
+                    conn.execute(f"ALTER TABLE printer_consumable ADD COLUMN {col_name} {col_def}")
             # 迁移明文密码
             self._upgrade_passwords(conn)
 
@@ -194,7 +211,52 @@ def log_activity(conn, user_id, action, target_type=None, target_id=None, detail
     )
 
 
+# 耗材类型（历史保留，但新创建只允许 toner）
+VALID_CONSUMABLE_TYPES = ["toner", "ink", "drum", "paper", "ribbon", "other"]
+
+# 打印机类型（asset.printer_type）
+VALID_PRINTER_TYPES = ["mono", "color"]
+
+# 墨粉颜色
+VALID_TONER_COLORS = ["black", "cyan", "magenta", "yellow"]
+
+# 墨粉型号/来源（printer_consumable.model）
+VALID_TONER_MODELS = ["原装", "国产"]
+
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS printer_consumable (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT NOT NULL,
+    type            TEXT NOT NULL DEFAULT 'other',
+    stock           INTEGER NOT NULL DEFAULT 0,
+    threshold       INTEGER NOT NULL DEFAULT 0,
+    asset_id        INTEGER REFERENCES asset(id),
+    unit            TEXT DEFAULT '个',
+    color           TEXT,
+    model           TEXT,
+    current_price   REAL,
+    installed_at    DATE,
+    notes           TEXT,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS consumable_replacement (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    consumable_id           INTEGER NOT NULL REFERENCES printer_consumable(id) ON DELETE CASCADE,
+    asset_id_snapshot       INTEGER,
+    consumable_name_snapshot TEXT,
+    old_installed_at        DATE,
+    replaced_at             DATE NOT NULL,
+    usage_days              INTEGER NOT NULL,
+    price                   REAL,
+    daily_cost              REAL,
+    new_installed_at        DATE,
+    new_price               REAL,
+    reason                  TEXT,
+    notes                   TEXT,
+    created_at              DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS "user" (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     employee_id     TEXT UNIQUE NOT NULL,
@@ -221,6 +283,7 @@ CREATE TABLE IF NOT EXISTS asset (
     purchase_date       DATE,
     purchase_price      REAL,
     warranty_date       DATE,
+    printer_type        TEXT,
     notes               TEXT,
     created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -282,6 +345,39 @@ LEGACY_MIGRATION_SCHEMA = """
 -- Legacy MVP databases predated activity logging and app-level settings.
 -- Fresh installs get these tables from SCHEMA above; this block is only
 -- for idempotently filling gaps in existing SQLite files.
+CREATE TABLE IF NOT EXISTS printer_consumable (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT NOT NULL,
+    type            TEXT NOT NULL DEFAULT 'other',
+    stock           INTEGER NOT NULL DEFAULT 0,
+    threshold       INTEGER NOT NULL DEFAULT 0,
+    asset_id        INTEGER REFERENCES asset(id),
+    unit            TEXT DEFAULT '个',
+    color           TEXT,
+    model           TEXT,
+    current_price   REAL,
+    installed_at    DATE,
+    notes           TEXT,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS consumable_replacement (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    consumable_id           INTEGER NOT NULL REFERENCES printer_consumable(id) ON DELETE CASCADE,
+    asset_id_snapshot       INTEGER,
+    consumable_name_snapshot TEXT,
+    old_installed_at        DATE,
+    replaced_at             DATE NOT NULL,
+    usage_days              INTEGER NOT NULL,
+    price                   REAL,
+    daily_cost              REAL,
+    new_installed_at        DATE,
+    new_price               REAL,
+    reason                  TEXT,
+    notes                   TEXT,
+    created_at              DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS activity_log (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id         INTEGER,

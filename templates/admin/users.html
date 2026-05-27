@@ -1,0 +1,317 @@
+{% extends "base.html" %}
+{% block title %}用户管理 — IT 资产管理{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title" data-page-title="users">用户管理</h1>
+        <p class="page-subtitle">管理系统用户账号与权限</p>
+    </div>
+    <div class="page-actions">
+        <button type="button" class="btn btn-primary" id="btnAddUser">新增用户</button>
+    </div>
+</div>
+
+<div class="table-shell">
+    <table class="asset-data-table">
+        <thead>
+            <tr>
+                <th>工号</th>
+                <th>姓名</th>
+                <th>部门</th>
+                <th>电话</th>
+                <th>邮箱</th>
+                <th>角色</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody id="usersTableBody"></tbody>
+    </table>
+    <div id="emptyState" class="empty-state" style="display:none;">
+        <p class="empty-state-text">暂无用户</p>
+        <p class="empty-state-hint">点击「新增用户」创建第一个用户</p>
+    </div>
+</div>
+
+<!-- 新增/编辑用户弹窗 -->
+<div id="userModal" class="modal" style="display:none;">
+    <div class="modal-content" data-modal="user-form">
+        <h3 id="modalTitle">新增用户</h3>
+        <form id="userForm" autocomplete="off">
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="uEmployeeId">工号 *</label>
+                    <input type="text" id="uEmployeeId" name="employee_id" required>
+                </div>
+                <div class="form-group">
+                    <label for="uName">姓名 *</label>
+                    <input type="text" id="uName" name="name" required>
+                </div>
+            </div>
+            <div class="form-group" id="passwordGroup">
+                <label for="uPassword">初始密码 *</label>
+                <input type="password" id="uPassword" name="password" autocomplete="new-password">
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="uDepartment">部门</label>
+                    <input type="text" id="uDepartment" name="department">
+                </div>
+                <div class="form-group">
+                    <label for="uRole">角色</label>
+                    <select id="uRole" name="role">
+                        <option value="employee">普通员工</option>
+                        <option value="admin">管理员</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="uPhone">电话</label>
+                    <input type="text" id="uPhone" name="phone">
+                </div>
+                <div class="form-group">
+                    <label for="uEmail">邮箱</label>
+                    <input type="text" id="uEmail" name="email">
+                </div>
+            </div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
+                <button type="button" class="btn btn-secondary" id="btnCancelModal">取消</button>
+                <button type="submit" class="btn btn-primary" id="btnSubmitForm">保存</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- 重置密码弹窗 -->
+<div id="resetModal" class="modal" style="display:none;">
+    <div class="modal-content" data-modal="reset-password">
+        <h3>重置密码</h3>
+        <p id="resetInfo" style="margin-bottom:12px;color:var(--color-text-muted);font-size:14px;"></p>
+        <form id="resetForm" autocomplete="off">
+            <input type="hidden" id="rId">
+            <div class="form-group">
+                <label for="rPassword">新密码 *</label>
+                <input type="password" id="rPassword" name="new_password" required autocomplete="new-password">
+            </div>
+            <div class="form-group">
+                <label for="rPasswordConfirm">确认密码 *</label>
+                <input type="password" id="rPasswordConfirm" required autocomplete="new-password">
+            </div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
+                <button type="button" class="btn btn-secondary" id="btnCancelReset">取消</button>
+                <button type="submit" class="btn btn-warning">重置密码</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+    const ROLE_LABELS = {admin:'管理员', employee:'普通员工'};
+    const ROLE_BADGE_CLASS = {admin:'badge-assigned', employee:'badge-instock'};
+    let editingId = null;
+
+    async function loadUsers() {
+        const data = await apiFetch('/api/users');
+        const tbody = document.getElementById('usersTableBody');
+        const empty = document.getElementById('emptyState');
+        tbody.replaceChildren();
+
+        if (!data.users || data.users.length === 0) {
+            empty.style.display = '';
+            return;
+        }
+        empty.style.display = 'none';
+
+        data.users.forEach(function(u) {
+            const tr = document.createElement('tr');
+
+            // 工号
+            const tdEid = document.createElement('td');
+            tdEid.textContent = u.employee_id || '-';
+            tr.appendChild(tdEid);
+
+            // 姓名
+            const tdName = document.createElement('td');
+            const nameStrong = document.createElement('strong');
+            nameStrong.textContent = u.name || '-';
+            tdName.appendChild(nameStrong);
+            tr.appendChild(tdName);
+
+            // 部门
+            const tdDept = document.createElement('td');
+            tdDept.textContent = u.department || '-';
+            tr.appendChild(tdDept);
+
+            // 电话
+            const tdPhone = document.createElement('td');
+            tdPhone.textContent = u.phone || '-';
+            tr.appendChild(tdPhone);
+
+            // 邮箱
+            const tdEmail = document.createElement('td');
+            tdEmail.textContent = u.email || '-';
+            tr.appendChild(tdEmail);
+
+            // 角色
+            const tdRole = document.createElement('td');
+            const roleBadge = document.createElement('span');
+            roleBadge.className = 'badge ' + (ROLE_BADGE_CLASS[u.role] || '');
+            roleBadge.textContent = ROLE_LABELS[u.role] || u.role;
+            tdRole.appendChild(roleBadge);
+            tr.appendChild(tdRole);
+
+            // 操作
+            const tdActions = document.createElement('td');
+            tdActions.style.whiteSpace = 'nowrap';
+
+            const btnEdit = document.createElement('button');
+            btnEdit.type = 'button';
+            btnEdit.className = 'btn btn-sm btn-secondary';
+            btnEdit.textContent = '编辑';
+            btnEdit.addEventListener('click', function() { openEdit(u); });
+            tdActions.appendChild(btnEdit);
+
+            tdActions.appendChild(document.createTextNode(' '));
+
+            const btnReset = document.createElement('button');
+            btnReset.type = 'button';
+            btnReset.className = 'btn btn-sm btn-warning';
+            btnReset.textContent = '重置密码';
+            btnReset.addEventListener('click', function() { openReset(u); });
+            tdActions.appendChild(btnReset);
+
+            tdActions.appendChild(document.createTextNode(' '));
+
+            const btnDel = document.createElement('button');
+            btnDel.type = 'button';
+            btnDel.className = 'btn btn-sm btn-danger';
+            btnDel.textContent = '删除';
+            btnDel.addEventListener('click', function() { deleteUser(u); });
+            tdActions.appendChild(btnDel);
+
+            tr.appendChild(tdActions);
+            tbody.appendChild(tr);
+        });
+    }
+
+    function openModal() {
+        document.getElementById('userModal').style.display = '';
+    }
+    function closeModal() {
+        document.getElementById('userModal').style.display = 'none';
+        document.getElementById('userForm').reset();
+        editingId = null;
+    }
+    function closeResetModal() {
+        document.getElementById('resetModal').style.display = 'none';
+        document.getElementById('resetForm').reset();
+    }
+
+    function openCreate() {
+        editingId = null;
+        document.getElementById('modalTitle').textContent = '新增用户';
+        document.getElementById('btnSubmitForm').textContent = '保存';
+        document.getElementById('userForm').reset();
+        document.getElementById('uEmployeeId').disabled = false;
+        document.getElementById('passwordGroup').style.display = '';
+        document.getElementById('uPassword').required = true;
+        openModal();
+    }
+
+    function openEdit(u) {
+        editingId = u.id;
+        document.getElementById('modalTitle').textContent = '编辑用户';
+        document.getElementById('btnSubmitForm').textContent = '更新';
+        document.getElementById('uEmployeeId').value = u.employee_id || '';
+        document.getElementById('uEmployeeId').disabled = true;
+        document.getElementById('uName').value = u.name || '';
+        document.getElementById('uDepartment').value = u.department || '';
+        document.getElementById('uPhone').value = u.phone || '';
+        document.getElementById('uEmail').value = u.email || '';
+        document.getElementById('uRole').value = u.role || 'employee';
+        // Hide password field in edit mode
+        document.getElementById('passwordGroup').style.display = 'none';
+        document.getElementById('uPassword').required = false;
+        openModal();
+    }
+
+    function openReset(u) {
+        document.getElementById('rId').value = u.id;
+        const info = document.getElementById('resetInfo');
+        info.textContent = '用户: ' + u.name + '（' + u.employee_id + '）';
+        document.getElementById('rPassword').value = '';
+        document.getElementById('rPasswordConfirm').value = '';
+        document.getElementById('resetModal').style.display = '';
+    }
+
+    async function handleSubmit(e) {
+        e.preventDefault();
+        const payload = {
+            name: document.getElementById('uName').value.trim(),
+            department: document.getElementById('uDepartment').value.trim() || null,
+            phone: document.getElementById('uPhone').value.trim() || null,
+            email: document.getElementById('uEmail').value.trim() || null,
+            role: document.getElementById('uRole').value,
+        };
+
+        if (!payload.name) { alert('请填写姓名'); return; }
+
+        try {
+            if (editingId) {
+                await apiFetch('/api/users/' + editingId, {method: 'PUT', body: JSON.stringify(payload)});
+            } else {
+                payload.employee_id = document.getElementById('uEmployeeId').value.trim();
+                payload.password = document.getElementById('uPassword').value;
+                if (!payload.employee_id) { alert('请填写工号'); return; }
+                if (!payload.password) { alert('请设置初始密码'); return; }
+                await apiFetch('/api/users', {method: 'POST', body: JSON.stringify(payload)});
+            }
+            closeModal();
+            loadUsers();
+        } catch(err) { /* apiFetch already alerted */ }
+    }
+
+    async function handleReset(e) {
+        e.preventDefault();
+        const id = document.getElementById('rId').value;
+        const pw = document.getElementById('rPassword').value;
+        const pw2 = document.getElementById('rPasswordConfirm').value;
+        if (!pw) { alert('请输入新密码'); return; }
+        if (pw !== pw2) { alert('两次输入的密码不一致'); return; }
+        try {
+            await apiFetch('/api/users/' + id + '/reset-password', {method: 'POST', body: JSON.stringify({new_password: pw})});
+            alert('密码已重置');
+            closeResetModal();
+        } catch(err) {}
+    }
+
+    async function deleteUser(u) {
+        if (!confirm('确定删除用户「' + u.name + '（' + u.employee_id + '）」吗？\n如果该用户持有资产，需先归还资产才能删除。')) return;
+        try {
+            await apiFetch('/api/users/' + u.id, {method: 'DELETE'});
+            loadUsers();
+        } catch(err) {}
+    }
+
+    // Init
+    document.getElementById('btnAddUser').addEventListener('click', openCreate);
+    document.getElementById('btnCancelModal').addEventListener('click', closeModal);
+    document.getElementById('btnCancelReset').addEventListener('click', closeResetModal);
+    document.getElementById('userForm').addEventListener('submit', handleSubmit);
+    document.getElementById('resetForm').addEventListener('submit', handleReset);
+
+    document.getElementById('userModal').addEventListener('click', function(e) {
+        if (e.target === this) closeModal();
+    });
+    document.getElementById('resetModal').addEventListener('click', function(e) {
+        if (e.target === this) closeResetModal();
+    });
+
+    loadUsers();
+})();
+</script>
+{% endblock %}

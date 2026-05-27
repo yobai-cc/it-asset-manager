@@ -27,68 +27,65 @@
         <p style="text-align:center;padding:40px 0;color:var(--text-muted);">加载中...</p>
     </div>
     <script>
-    const assetId = {{ asset_id }};
-    const catIcons = {computer:'\u{1F4BB}',monitor:'\u{1F5A5}',phone:'\u{1F4F1}',tablet:'\u{1F4CB}',printer:'\u{1F5A8}',server:'\u{1F5C4}',network:'\u{1F310}',firewall:'\u{1F6E1}',switch:'\u{1F500}'};
-    const catLabels = {computer:'电脑',monitor:'显示器',phone:'手机',tablet:'平板',printer:'打印机',server:'服务器',network:'网络设备',firewall:'防火墙',switch:'交换机'};
-    const statusLabels = {in_stock:'库存',assigned:'在用',maintenance:'维修中',scrapped:'已报废'};
-    const statusClasses = {in_stock:'badge-instock',assigned:'badge-assigned',maintenance:'badge-maintenance',scrapped:'badge-scrapped'};
+    var assetId = {{ asset_id }};
+    var catIcons = {computer:'\u{1F4BB}',monitor:'\u{1F5A5}',phone:'\u{1F4F1}',tablet:'\u{1F4CB}',printer:'\u{1F5A8}',server:'\u{1F5C4}',network:'\u{1F310}',firewall:'\u{1F6E1}',switch:'\u{1F500}'};
+    var catLabels = {computer:'电脑',monitor:'显示器',phone:'手机',tablet:'平板',printer:'打印机',server:'服务器',network:'网络设备',firewall:'防火墙',switch:'交换机'};
+    var statusLabels = {in_stock:'库存',assigned:'在用',maintenance:'维修中',scrapped:'已报废'};
+    var statusClasses = {in_stock:'badge-instock',assigned:'badge-assigned',maintenance:'badge-maintenance',scrapped:'badge-scrapped'};
 
     function addLine(parent, text) {
-        const div = document.createElement('div');
+        var div = document.createElement('div');
         div.textContent = text;
         parent.appendChild(div);
     }
 
     function buildScanCard(asset, user) {
-        const wrapper = document.getElementById('scanContent');
+        var wrapper = document.getElementById('scanContent');
         wrapper.replaceChildren();
 
-        const header = document.createElement('div');
+        var header = document.createElement('div');
         header.className = 'scan-header';
         header.textContent = 'IT 资产管理';
         wrapper.appendChild(header);
 
-        const card = document.createElement('div');
+        var card = document.createElement('div');
         card.className = 'scan-card';
 
-        const tag = document.createElement('div');
+        var tag = document.createElement('div');
         tag.className = 'scan-tag';
-        tag.textContent = `${catIcons[asset.category] || ''} ${asset.asset_tag}`.trim();
+        tag.textContent = (catIcons[asset.category] || '') + ' ' + (asset.asset_tag || '');
+        tag.textContent = tag.textContent.trim();
         card.appendChild(tag);
 
-        const name = document.createElement('div');
+        var name = document.createElement('div');
         name.className = 'scan-name';
         name.textContent = asset.name;
         card.appendChild(name);
 
-        const statusWrap = document.createElement('div');
+        var statusWrap = document.createElement('div');
         statusWrap.className = 'scan-status';
-        const badge = document.createElement('span');
-        badge.className = `badge ${statusClasses[asset.status] || ''}`.trim();
+        var badge = document.createElement('span');
+        badge.className = 'badge ' + (statusClasses[asset.status] || '');
+        badge.className = badge.className.trim();
         badge.textContent = statusLabels[asset.status] || asset.status;
         statusWrap.appendChild(badge);
         card.appendChild(statusWrap);
 
-        const meta = document.createElement('div');
+        var meta = document.createElement('div');
         meta.className = 'scan-meta';
-        if (asset.brand) addLine(meta, asset.brand + (asset.model ? ' ' + asset.model : ''));
         addLine(meta, '分类：' + (catLabels[asset.category] || asset.category));
-        if (asset.holder_name) {
-            addLine(meta, '持有人：' + asset.holder_name + (asset.holder_dept ? ' (' + asset.holder_dept + ')' : ''));
-        }
-        addLine(meta, '位置：' + (asset.location || '-'));
         card.appendChild(meta);
 
         wrapper.appendChild(card);
 
         if (!user) {
-            const prompt = document.createElement('div');
+            var prompt = document.createElement('div');
             prompt.className = 'scan-card login-prompt';
-            const p = document.createElement('p');
+            var p = document.createElement('p');
             p.className = 'text-muted';
             p.style.marginBottom = '12px';
             p.textContent = '登录后可查看更多信息和操作';
-            const a = document.createElement('a');
+            var a = document.createElement('a');
             a.href = '/login';
             a.className = 'btn btn-primary btn-block';
             a.textContent = '登录';
@@ -96,14 +93,14 @@
             prompt.appendChild(a);
             wrapper.appendChild(prompt);
         } else if (user.role === 'admin') {
-            const adminCard = document.createElement('div');
+            var adminCard = document.createElement('div');
             adminCard.className = 'scan-card';
-            const p = document.createElement('p');
+            var p = document.createElement('p');
             p.style.marginBottom = '12px';
             p.textContent = '管理员：' + user.name;
-            const actions = document.createElement('div');
+            var actions = document.createElement('div');
             actions.className = 'scan-actions';
-            const a = document.createElement('a');
+            var a = document.createElement('a');
             a.href = '/assets/' + assetId;
             a.className = 'btn btn-primary';
             a.textContent = '查看详情 / 操作';
@@ -112,18 +109,18 @@
             adminCard.appendChild(actions);
             wrapper.appendChild(adminCard);
         } else {
-            const empCard = document.createElement('div');
+            var empCard = document.createElement('div');
             empCard.className = 'scan-card';
-            const p = document.createElement('p');
+            var p = document.createElement('p');
             p.style.marginBottom = '12px';
             p.textContent = user.name + '，你好';
-            const actions = document.createElement('div');
+            var actions = document.createElement('div');
             actions.className = 'scan-actions';
-            const a1 = document.createElement('a');
+            var a1 = document.createElement('a');
             a1.href = '/my/assets';
             a1.className = 'btn btn-secondary';
             a1.textContent = '我的资产';
-            const a2 = document.createElement('a');
+            var a2 = document.createElement('a');
             a2.href = '/my/applications/new';
             a2.className = 'btn btn-primary';
             a2.textContent = '申请资产';
@@ -135,25 +132,35 @@
         }
     }
 
+    function buildErrorCard(message) {
+        var wrapper = document.getElementById('scanContent');
+        wrapper.replaceChildren();
+        var card = document.createElement('div');
+        card.className = 'scan-card';
+        var p = document.createElement('p');
+        p.textContent = message;
+        card.appendChild(p);
+        wrapper.appendChild(card);
+    }
+
     async function init() {
-        const el = document.getElementById('scanContent');
         try {
-            const pubRes = await fetch(`/api/public/asset/${assetId}`);
+            var pubRes = await fetch('/api/public/asset/' + assetId);
             if (!pubRes.ok) {
-                el.innerHTML = '<div class="scan-card"><p>资产不存在或已被删除</p></div>';
+                buildErrorCard('资产不存在或已被删除');
                 return;
             }
-            const asset = await pubRes.json();
+            var asset = await pubRes.json();
 
-            let user = null;
+            var user = null;
             try {
-                const meRes = await fetch('/api/me');
+                var meRes = await fetch('/api/me');
                 if (meRes.ok) user = (await meRes.json()).user;
             } catch(e) {}
 
             buildScanCard(asset, user);
         } catch(err) {
-            el.innerHTML = '<div class="scan-card"><p>加载失败，请检查网络连接</p></div>';
+            buildErrorCard('加载失败，请检查网络连接');
         }
     }
 

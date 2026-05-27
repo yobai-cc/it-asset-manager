@@ -7,8 +7,8 @@ IT 固定资产管理追踪系统，面向 IT 管理员和普通员工。
 - **技术栈**：Python Flask 3.1 + SQLite（原生 SQL）+ Jinja2 + 原生 JS + CSS
 - **无前端框架**：纯 vanilla JS，无构建步骤
 - **部署**：Flask 5000 端口 → Caddy 反向代理 9090 端口（10.18.0.68:9090）
-- **规模**：server.py ~1320 行，models.py ~300 行，61 个测试
-- **标签打印**：立象 Argox 热转印打印机 + BarTender + 60×40mm 亚银纸（Logo + 资产信息 + QR，无一维码）
+- **规模**：server.py ~2222 行，models.py ~389 行，192 个测试
+- **标签打印**：立象 Argox 热转印打印机 + 60×40mm 亚银纸，浏览器直接打印（Logo + 资产信息 + QR）
 
 ## 快速启动
 
@@ -35,7 +35,7 @@ python3 server.py                   # 启动 http://0.0.0.0:5000
 
 ```
 it-asset-manager/
-├── server.py              # Flask 应用：所有路由 + API（单文件，~1320 行）
+├── server.py              # Flask 应用：所有路由 + API（单文件，~2134 行）
 ├── models.py              # 数据模型、常量、Schema SQL、工具函数
 ├── init_db.py             # 数据库初始化 + 种子数据
 ├── requirements.txt       # Flask, qrcode, Pillow, pytest
@@ -53,9 +53,11 @@ it-asset-manager/
 │   │   ├── assets.html    # 资产台账（状态Tabs、现代表格、右侧详情抽屉、批量标签、导出CSV、批量导入）
 │   │   ├── asset_detail.html # 资产详情（时间线 + 操作按钮）
 │   │   ├── asset_form.html   # 新增/编辑资产表单
-│   │   ├── label.html     # 标签打印页（60×40mm，Logo + 字段 + QR，无一维码）
+│   │   ├── label.html     # 标签打印页（60×40mm，Logo + 字段 + QR）
 │   │   ├── applications.html # 申请审核
 │   │   ├── maintenance.html  # 维修总览
+│   │   ├── consumables.html  # 墨粉管理（打印机墨粉 CRUD + 库存调整）
+│   │   ├── users.html        # 用户管理（创建/编辑/角色/密码重置）
 │   │   ├── settings.html  # 系统设置（Logo、标签字段、QR地址）
 │   │   └── activity.html  # 操作记录
 │   └── employee/
@@ -64,14 +66,14 @@ it-asset-manager/
 │       ├── applications.html    # 我的申请
 │       └── application_form.html # 提交申请
 └── tests/
-    └── test_api.py        # 61 个自动化测试
+    └── test_api.py        # 192 个自动化测试
 ```
 
 ---
 
 ## 数据库设计
 
-### 表结构（7 张表）
+### 表结构（9 张表）
 
 ```
 user                 资产申请（asset_application）
@@ -84,8 +86,39 @@ user                 资产申请（asset_application）
 ├── role [admin|employee]├── admin_notes
 ├── password_hash       └── approved_at
 └── created_at
-                     activity_log
-asset                ├── id PK
+
+打印机墨粉（printer_consumable）        activity_log
+├── id PK                              ├── id PK
+├── name                               ├── user_id
+├── type [固定 toner]                   ├── action
+├── stock                              ├── target_type
+├── threshold                          ├── target_id
+├── asset_id → asset（关联打印机）      ├── detail
+├── unit（默认"个"）                    └── created_at
+├── color（墨粉颜色，如 black/cyan/magenta/yellow）
+├── model（墨粉型号：原装/国产）
+├── current_price（当前价格）
+├── installed_at（当前安装日期）
+├── notes
+└── created_at
+
+墨粉更替历史（consumable_replacement）
+├── id PK
+├── consumable_id → printer_consumable
+├── asset_id_snapshot
+├── consumable_name_snapshot
+├── old_installed_at
+├── replaced_at
+├── usage_days（使用天数，最小 1）
+├── price（旧周期价格）
+├── daily_cost（日均成本，price/usage_days 保留 2 位）
+├── new_installed_at
+├── new_price
+├── reason
+├── notes
+└── created_at
+
+asset
 ├── id PK            ├── user_id
 ├── asset_tag UNIQUE ├── action
 ├── name             ├── target_type
@@ -93,6 +126,7 @@ asset                ├── id PK
 ├── brand/model      ├── detail
 ├── serial_number    └── created_at
 ├── status [见下方状态机]
+├── printer_type [mono|color|NULL]（仅打印机资产）
 ├── current_holder_id → user   app_config
 ├── location         ├── key PK（如 label_fields, qr_base_url, company_logo）
 ├── purchase_date    └── value（JSON 或纯文本）
@@ -152,8 +186,14 @@ in_stock ──assign──> assigned ──return──> in_stock
 | `VALID_CATEGORIES` | 9 种分类 | computer, monitor, phone, tablet, printer, server, network, firewall, switch |
 | `VALID_STATUSES` | 4 种状态 | in_stock, assigned, maintenance, scrapped |
 | `STATE_TRANSITIONS` | 状态→允许事件映射 | in_stock→[stock_in, assign, scrap], ... |
-| `LABEL_FIELD_OPTIONS` | 标签可选字段 | name, serial_number, holder, location, brand, model |
-| `LABEL_FIELDS_DEFAULT` | 标签默认字段 | ["name"] |
+| `LABEL_FIELD_OPTIONS` | 标签可选字段 | name, serial_number, brand, model, holder, location |
+| `LABEL_FIELDS_DEFAULT` | 标签默认字段 | ["name", "serial_number"] |
+| `LABEL_FIELDS_MAX` | 标签最多辅助字段数 | 3 |
+| `LABEL_FIXED_FIELDS` | 标签固定字段 | asset_tag, numeric_id, qr |
+| `VALID_CONSUMABLE_TYPES` | 耗材类型（历史值，仅 toner 可创建/更新） | toner, ink, drum, paper, ribbon, other |
+| `VALID_PRINTER_TYPES` | 打印机类型 | mono, color |
+| `VALID_TONER_COLORS` | 墨粉颜色 | black, cyan, magenta, yellow |
+| `VALID_TONER_MODELS` | 墨粉型号（原装/国产） | 原装, 国产 |
 
 **新增分类时**：需同时更新 PREFIX、NAMES、ICONS、COLORS 四个字典。
 
@@ -161,7 +201,7 @@ in_stock ──assign──> assigned ──return──> in_stock
 
 ## 路由清单
 
-### 页面路由（18 条）
+### 页面路由（20 条）
 
 | 路径 | 角色 | 模板 |
 |------|------|------|
@@ -175,6 +215,8 @@ in_stock ──assign──> assigned ──return──> in_stock
 | `/assets/<id>/label` | admin | admin/label.html |
 | `/applications` | admin | admin/applications.html |
 | `/maintenance` | admin | admin/maintenance.html |
+| `/consumables` | admin | admin/consumables.html |
+| `/users` | admin | admin/users.html |
 | `/settings` | admin | admin/settings.html |
 | `/activity` | admin | admin/activity.html |
 | `/scan` | 公开 | scan_camera.html |
@@ -184,7 +226,7 @@ in_stock ──assign──> assigned ──return──> in_stock
 | `/my/applications` | employee | employee/applications.html |
 | `/my/applications/new` | employee | employee/application_form.html |
 
-### API 路由（34 条）
+### API 路由（55 条）
 
 **认证**：`POST /api/login`、`POST /api/logout`、`GET /api/me`
 
@@ -202,7 +244,9 @@ in_stock ──assign──> assigned ──return──> in_stock
 
 **统计**：`GET /api/stats`（含 warranty_expiring/expired）
 
-**用户**：`GET /api/users`
+**用户**：`GET /api/users`、`POST /api/users`、`GET /api/users/<id>`、`PUT /api/users/<id>`、`DELETE /api/users/<id>`、`POST /api/users/<id>/reset-password`
+
+**耗材**：`GET /api/consumables`、`POST /api/consumables`、`GET/PUT/DELETE /api/consumables/<id>`、`POST /api/consumables/<id>/adjust`、`POST /api/consumables/<id>/replace`、`GET /api/consumables/<id>/replacements`、`GET /api/printers/consumables`
 
 **标签**：`GET /api/assets/<id>/qr`、`POST /api/batch-labels`
 
@@ -210,6 +254,8 @@ in_stock ──assign──> assigned ──return──> in_stock
 
 **设置**：`GET/PUT /api/settings/label`、`GET/PUT /api/settings/qr-base-url`
 　　　　 `GET/POST/DELETE /api/settings/logo`
+
+`GET /api/settings/label` 返回 `{fields, options, fixed_fields, max_fields}`：`fields` 是已选择辅助字段；`options` 是可选字段元数据（label/group/volatile）；`fixed_fields` 固定为资产标签号、数字编号、QR；`max_fields` 当前为 3。`PUT /api/settings/label` 会去重、过滤非法字段并最多保留 3 个，空数组表示只打印固定字段。
 
 **导出**：`GET /api/assets/export`（CSV，带 UTF-8 BOM）
 
@@ -232,6 +278,13 @@ in_stock ──assign──> assigned ──return──> in_stock
 - 普通员工和公开扫码页走轻量壳 `.simple-shell`，不要强行套管理端侧边栏。
 - `/assets` 台账行点击通过 `#asset-table-body` 事件代理打开 `openAssetDetailDrawer(id)`，不要给每个动态 `<tr>` 单独绑定监听器。
 - 抽屉内容使用 `/api/assets/<id>` 获取完整详情，动态字段用 `textContent`/DOM 节点构造；不要把资产名称、备注、人员名直接拼进 `innerHTML`。
+
+### 资产列表易用性
+
+- 资产列表没有匹配数据时显示 `.empty-state` 空状态，不要只留空表格。
+- 批量标签栏在当前页有资产时保持可见：未勾选时提示“请先勾选资产”并禁用按钮，勾选后显示“N 项已选”。
+- 分页区域除页码外要显示 `.pagination-info` 范围说明（如“第 1-15 条，共 42 条”）。
+- CSV 导入弹窗需说明 UTF-8 编码、必填列 `name`/`category`、常用可选列，并建议先导出 CSV 作为参考。
 
 ### 共享函数（base.html）
 
@@ -280,12 +333,19 @@ const catLabels = {computer:'电脑', monitor:'显示器', ...};
 
 ### 标签打印
 
-- 尺寸 60mm × 40mm，`.physical-label-preview` 保持 6:4 比例。
-- 当前标签设计只有 Logo、资产名称/标签号/字段、数字编号、QR 码；**没有一维码**，不要再添加 `barcode`、`label-body-barcode`、`barcode-mock-lines` 等结构。
+- **物理标签**：60mm × 40mm 亚银纸，立象 Argox 热转印打印机，浏览器直接打印（不经过 BarTender）。
+- **打印尺寸**：`@page { size: 60mm 40mm; margin: 0 }`，打印态标签盒为 57.6×37.6mm + 四周 1.1mm 安全边距，外部占用 59.8×39.8mm，避免浏览器/驱动舍入误差导致空白第二页。
+- **单位体系**：标签内所有元素（Logo、字体、QR 码、间距）统一使用 mm 单位，不混用 px，确保与纸张物理尺寸精确对应。
+- 当前标签设计包含 Logo（11mm）、资产名称（3.8mm 字号）/标签号（2.8mm）/可选字段、数字编号（7mm 字号）、QR 码（20mm）。
+- 固定打印项：资产标签号、数字编号、QR。辅助字段默认 `name` + `serial_number`，最多 3 个；`holder`/`location` 是易过期动态字段，设置页作为高级字段提示，优先建议扫码查看实时信息。
+- 打印页、设置页和预览文案保持”60×40mm QR 标签”的一致表述。
 - Logo 存储在 `static/uploads/company_logo.*`，路径记录在 app_config
 - Logo 上传接口是 `POST /api/settings/logo`，保存目录必须用 `os.path.abspath(__file__)` 推导项目根路径；这里曾因 `_os.abspath` 拼写错误导致上传失败。
 - 标签字段可通过设置页配置，单标签、批量标签、设置页预览、资产抽屉预览都应读取 `/api/settings/logo` 和 `/api/settings/label`
-- `@media print` 隐藏非打印元素，适配热转印打印机
+- **打印 CSS 要点**：
+  - 用 `display: none` 隐藏非打印元素（不要用 `visibility: hidden`，会占空间导致布局问题）
+  - 用 `display: contents` 解除预览外框容器对打印布局的影响
+  - `html, body` 在 `@media print` 中必须 `margin: 0; padding: 0; width: auto; height: auto; overflow: hidden`，不要恢复 `height: 100%`，否则 Chromium 会生成空白第二页
 
 ### CSV 导出
 
@@ -313,6 +373,7 @@ const catLabels = {computer:'电脑', monitor:'显示器', ...};
 - `/scan` 页面：使用 html5-qrcode 库（CDN），调用后置摄像头扫描 QR 码
 - 识别后跳转到对应资产扫码落地页 `/scan/<id>`
 - 支持 `facingMode: "environment"` 优先使用后摄
+- 摄像头权限拒绝、启动失败、手动输入为空、手动输入查不到资产时，应给出面向普通员工的具体提示，不要只报技术错误。
 - 移动端仪表盘和"我的资产"页有扫码入口卡片（`.stat-scan` + `.mobile-only` CSS 模式）
 - 桌面端隐藏扫码入口：`.mobile-only { display: none }` + `@media (max-width: 768px) { display: block !important }`
 
@@ -320,6 +381,22 @@ const catLabels = {computer:'电脑', monitor:'显示器', ...};
 
 - `log_activity(conn, user_id, action, target_type, target_id, detail)` 在已有连接中执行
 - 所有变更 API（CRUD + 生命周期 + 审批 + 设置修改 + 导出）都埋了记录
+
+### 墨粉管理（轻量 slot 模型）
+
+- **设计定位**：轻量 slot，专用于打印机墨粉（toner）的当前状态跟踪和更替历史记录。
+- **墨粉范围约束**：`type` 固定为 `toner`，API 拒绝其他类型（ink/drum/paper/ribbon/other）；`model` 限定为 `原装` 或 `国产`。
+- **打印机类型**：`asset.printer_type` 字段（`mono`/`color`）决定允许的墨粉颜色：`mono` 仅允许黑色，`color` 允许黑/青/品/黄四色。
+- `/consumables` 和 `GET /api/printers/consumables` 以 `asset.category='printer'` 为主数据源：普通打印机资产即使尚未配置耗材 slot，也会出现在墨粉管理；标签打印机会按 `_is_label_printer()` 过滤。
+- 未配置 slot 的打印机返回 `printer_type='unconfigured'`、`consumables=[]`，前端显示待配置状态，并提供为当前打印机新增墨粉的入口。
+- 一台打印机可有多个 `printer_consumable` 行（黑/青/品/黄各一支墨粉等），各自独立跟踪。
+- `printer_consumable` 记录当前 slot 状态：`color`、`model`、`current_price`、`installed_at`、`stock`、`threshold`。
+- `consumable_replacement` 记录更替历史：归档旧周期快照（价格、安装日期、使用天数、日均成本）+ 新周期参数。
+- `POST /api/consumables/<id>/replace`：创建一条 replacement 记录，计算 `usage_days=max(replaced_at - old_installed_at, 1)` 和 `daily_cost=price/usage_days`（保留 2 位），更新当前 slot 的 `installed_at` 和 `current_price`，可选 `use_stock=true` 扣减库存 -1。
+- `use_stock=true` 且 `stock <= 0` 时返回 400。
+- 更替只影响该耗材行，不影响同一打印机的其他耗材。
+- 列表/详情响应自动计算 `usage_days` 和 `estimated_daily_cost`（服务端 `_consumable_usage_fields()` 辅助函数）。
+- 前端 `consumables.html` 提供更换墨粉弹窗（更换日期、新价格、库存取用、原因、备注）和历史弹窗。
 
 ---
 
@@ -351,9 +428,17 @@ const catLabels = {computer:'电脑', monitor:'显示器', ...};
 
 - `templates/admin/label.html`（单标签）和 `assets.html` 中的 `batchPrintLabels()` 必须保持同步
 - 两者都从 `/api/settings/label` 和 `/api/settings/logo` 读取配置
-- 设置页预览和资产抽屉预览复用 `base.html` 的 `createPhysicalLabel(asset, qrSrc, options)`；若上传了 Logo，传 `options.logoUrl`
-- 布局结构：`.label-header`（Logo + 名称/标签号/字段）+ `.label-footer-zone`（数字编号 + QR）
-- 禁止恢复一维码或模拟条形码；如需更多字段，只追加到 `.label-meta-tags` 内，保持 60mm×40mm 内不溢出
+- 设置页预览和资产抽屉预览复用 `base.html` 的 `createPhysicalLabel(asset, qrSrc, options)`；若上传了 Logo，传 `options.logoUrl`；字段配置通过 `options.fields` 传入
+- **布局结构**：`.label-header`（Logo 11mm + `.label-meta-tags` 文字区）+ `.label-footer-zone`（数字编号 7mm + QR 20mm）
+- **打印时标签缩小为 57.6×37.6mm**：`@media print` 中 `.physical-label`/`.label-card` 设为 `width: 57.6mm; height: 37.6mm; margin: 1.1mm`，四周安全边距防止溢出和空白第二页
+- 如需更多字段，追加到 `.label-meta-tags`/`.label-text` 内；辅助字段必须受 `LABEL_FIELDS_MAX=3` 限制，保持内容不溢出
+- **XSS 防护**：批量标签 `buildPrintLabel()` 用 `escapePrintText()` 转义资产字段；单标签 `label.html` 用 `textContent` 写入
+
+### 用户管理
+
+- `DELETE /api/users/<id>` 有三层保护：不能删自己（400）、不能删最后一个管理员（400）、不能删持有未归还资产的用户（400）。
+- 用户创建/编辑/密码重置均通过管理端 API，密码使用 `werkzeug.security` 哈希存储。
+- API 响应不暴露 `password_hash` 字段。
 
 ---
 

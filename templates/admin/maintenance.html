@@ -1,7 +1,12 @@
 {% extends "base.html" %}
 {% block title %}维修总览 - IT 资产管理{% endblock %}
 {% block content %}
-<h2>维修总览</h2>
+<div class="page-header">
+    <div>
+        <h1 class="page-title">维修总览</h1>
+        <p class="page-subtitle">查看和管理所有维修中的资产</p>
+    </div>
+</div>
 <div class="filter-bar">
     <select id="statusFilter" class="input" onchange="loadMaintenance()">
         <option value="">全部</option>

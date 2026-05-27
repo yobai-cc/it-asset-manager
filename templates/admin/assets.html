@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}资产列表 - IT 资产管理{% endblock %}
+{% block title %}资产台账 - IT 资产管理{% endblock %}
 {% block content %}
 <div class="page-header">
     <div>
@@ -13,17 +13,17 @@
     </div>
 </div>
 
-<div class="asset-toolbar">
-    <div class="asset-toolbar-left">
-        <div class="status-tabs" id="statusTabs" aria-label="状态筛选">
-            <button type="button" class="status-tab active" data-status="">全部</button>
-            <button type="button" class="status-tab" data-status="assigned">在用</button>
-            <button type="button" class="status-tab" data-status="in_stock">库存</button>
-            <button type="button" class="status-tab" data-status="maintenance">维修中</button>
-            <button type="button" class="status-tab" data-status="scrapped">已报废</button>
+<div class="toolbar">
+    <div class="toolbar-left">
+        <div class="filter-tabs" id="statusTabs">
+            <button type="button" class="tab-btn active" data-status="">全部</button>
+            <button type="button" class="tab-btn" data-status="assigned">在用</button>
+            <button type="button" class="tab-btn" data-status="in_stock">库存</button>
+            <button type="button" class="tab-btn" data-status="maintenance">维修中</button>
+            <button type="button" class="tab-btn" data-status="scrapped">已报废</button>
         </div>
-        <select id="categoryFilter" class="input" aria-label="类别筛选">
-            <option value="">全部类别</option>
+        <select id="categoryFilter" class="category-select">
+            <option value="">类别: 全部</option>
             <option value="computer">电脑</option><option value="monitor">显示器</option>
             <option value="phone">手机</option><option value="tablet">平板</option>
             <option value="printer">打印机</option><option value="server">服务器</option>
@@ -31,16 +31,57 @@
             <option value="switch">交换机</option>
         </select>
     </div>
-    <div class="asset-toolbar-right">
-        <input type="text" id="searchInput" placeholder="搜索标签号/名称/序列号/品牌..." class="input">
-        <button class="btn btn-secondary" type="button" onclick="loadAssets()">搜索</button>
+    <div class="search-wrapper">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="searchInput" placeholder="搜索标签号、名称、序列号..." class="search-input">
     </div>
+</div>
+
+<div class="batch-bar" id="batchBar" style="display:none;">
+    <span class="batch-info" id="batchHint">请先勾选资产</span>
+    <button class="btn-batch-action" type="button" onclick="batchPrintLabels()" id="batchLabelBtn" disabled>批量打印标签</button>
+</div>
+
+<div class="table-shell">
+    <table class="ledger-table" id="assetsTable" style="table-layout:fixed;">
+        <colgroup>
+            <col style="width:40px">
+            <col style="width:13%">
+            <col style="width:25%">
+            <col style="width:11%">
+            <col style="width:10%">
+            <col style="width:11%">
+            <col style="width:12%">
+            <col style="width:12%">
+        </colgroup>
+        <thead>
+            <tr>
+                <th><input type="checkbox" id="selectAll" class="row-select" onchange="toggleSelectAll(this)"></th>
+                <th>标签号</th>
+                <th>资产</th>
+                <th>类别</th>
+                <th>状态</th>
+                <th>持有人</th>
+                <th>位置</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody id="asset-table-body"></tbody>
+    </table>
+    <div id="emptyState" class="empty-state" style="display:none;">
+        <p class="empty-state-text">暂无匹配的资产</p>
+        <p class="empty-state-hint">尝试调整筛选条件，或点击「新增资产」添加</p>
+    </div>
+</div>
+<div class="pagination-wrapper">
+    <div class="pagination-row" id="pagination"></div>
+    <div class="pagination-info" id="paginationInfo"></div>
 </div>
 
 <div id="importModal" class="modal" style="display:none;">
     <div class="modal-content">
         <h3>批量导入资产</h3>
-        <p class="text-muted" style="margin-bottom:var(--space-2);">上传 CSV 文件，格式与导出 CSV 一致。必填列：<code>name</code>、<code>category</code>。</p>
+        <p class="text-muted" style="margin-bottom:var(--space-2);">上传 CSV 文件批量导入资产，编码 UTF-8。必填列：<code>name</code>（名称）、<code>category</code>（英文值如 computer/monitor）。可选列：brand、model、serial_number、location 等。可先「导出CSV」获取参考文件。</p>
         <div class="form-group">
             <input type="file" id="importFile" accept=".csv" class="input">
         </div>
@@ -53,41 +94,8 @@
         </div>
     </div>
 </div>
-
-<div class="batch-bar" id="batchBar" style="display:none;">
-    <span><strong id="selectedCount">0</strong> 项已选</span>
-    <button class="btn btn-secondary btn-sm" type="button" onclick="batchPrintLabels()">批量打印标签</button>
-</div>
-
-<div class="table-shell">
-    <table class="asset-data-table" id="assetsTable" style="table-layout:fixed;">
-        <colgroup>
-            <col style="width:40px">
-            <col style="width:12%">
-            <col style="width:24%">
-            <col style="width:10%">
-            <col style="width:8%">
-            <col style="width:10%">
-            <col style="width:10%">
-            <col style="width:14%">
-        </colgroup>
-        <thead>
-            <tr>
-                <th><input type="checkbox" id="selectAll" class="row-select" onchange="toggleSelectAll(this)" aria-label="全选"></th>
-                <th>标签号</th>
-                <th>资产</th>
-                <th>类别</th>
-                <th>状态</th>
-                <th>持有人</th>
-                <th>位置</th>
-                <th>操作</th>
-            </tr>
-        </thead>
-        <tbody id="asset-table-body"></tbody>
-    </table>
-</div>
-<div class="pagination" id="pagination"></div>
 {% endblock %}
+
 {% block scripts %}
 <script>
 let currentPage = 1;
@@ -95,8 +103,9 @@ let currentStatus = '';
 const statusLabels = {in_stock:'库存',assigned:'在用',maintenance:'维修中',scrapped:'已报废'};
 const catLabels = {computer:'电脑',monitor:'显示器',phone:'手机',tablet:'平板',printer:'打印机',server:'服务器',network:'网络设备',firewall:'防火墙',switch:'交换机'};
 const catColors = {computer:'#2563eb',monitor:'#7c3aed',phone:'#059669',tablet:'#d97706',printer:'#ef4444',server:'#475569',network:'#0891b2',firewall:'#be185d',switch:'#65a30d'};
+const catIcons = {computer:'\u{1F4BB}',monitor:'\u{1F5A5}',phone:'\u{1F4F1}',tablet:'\u{1F4CB}',printer:'\u{1F5A8}',server:'\u{1F5C4}',network:'\u{1F310}',firewall:'\u{1F6E1}',switch:'\u{1F500}'};
 const statusClasses = {in_stock:'badge-instock',assigned:'badge-assigned',maintenance:'badge-maintenance',scrapped:'badge-scrapped'};
-const labelFieldLabels = {name:'名称',serial_number:'序列号',holder:'持有人',location:'位置',brand:'品牌',model:'型号'};
+const labelFieldLabels = {name:'资产名称',serial_number:'序列号',holder:'持有人',location:'位置',brand:'品牌',model:'型号'};
 
 function appendTextCell(row, text) {
     const td = document.createElement('td');
@@ -137,13 +146,13 @@ async function loadAssets(page = 1) {
         checkbox.type = 'checkbox';
         checkbox.className = 'asset-checkbox row-select';
         checkbox.value = asset.id;
-        checkbox.setAttribute('aria-label', `选择 ${asset.asset_tag}`);
         selectTd.appendChild(checkbox);
         row.appendChild(selectTd);
 
         const tagTd = document.createElement('td');
         const tagLink = document.createElement('a');
         tagLink.href = `/assets/${asset.id}`;
+        tagLink.className = 'tag-link';
         tagLink.textContent = asset.asset_tag;
         tagTd.appendChild(tagLink);
         row.appendChild(tagTd);
@@ -165,14 +174,14 @@ async function loadAssets(page = 1) {
         const cat = document.createElement('span');
         cat.className = 'cat-badge';
         cat.style.color = catColors[asset.category] || '#64748b';
-        cat.style.backgroundColor = `${catColors[asset.category] || '#64748b'}1A`;
-        cat.textContent = catLabels[asset.category] || asset.category;
+        cat.style.backgroundColor = (catColors[asset.category] || '#64748b') + '1A';
+        cat.textContent = (catIcons[asset.category] || '') + ' ' + (catLabels[asset.category] || asset.category);
         catTd.appendChild(cat);
         row.appendChild(catTd);
 
         const statusTd = document.createElement('td');
         const badge = document.createElement('span');
-        badge.className = `badge ${statusClasses[asset.status] || ''}`.trim();
+        badge.className = `status-badge ${statusClasses[asset.status] || ''}`.trim();
         badge.textContent = statusLabels[asset.status] || asset.status;
         statusTd.appendChild(badge);
         row.appendChild(statusTd);
@@ -181,13 +190,29 @@ async function loadAssets(page = 1) {
         appendTextCell(row, asset.location);
 
         const actionTd = document.createElement('td');
-        actionTd.appendChild(createButtonLink(`/assets/${asset.id}`, '详情'));
-        const label = createButtonLink(`/assets/${asset.id}/label`, '标签');
-        label.target = '_blank';
-        actionTd.appendChild(label);
+        const detailLink = document.createElement('a');
+        detailLink.href = `/assets/${asset.id}`;
+        detailLink.className = 'opt-link';
+        detailLink.textContent = '详情';
+        actionTd.appendChild(detailLink);
+        const labelLink = document.createElement('a');
+        labelLink.href = `/assets/${asset.id}/label`;
+        labelLink.className = 'opt-link';
+        labelLink.target = '_blank';
+        labelLink.textContent = '标签';
+        actionTd.appendChild(labelLink);
         row.appendChild(actionTd);
         tbody.appendChild(row);
     });
+    const emptyState = document.getElementById('emptyState');
+    const table = document.getElementById('assetsTable');
+    if (data.assets.length === 0) {
+        emptyState.style.display = 'block';
+        table.style.display = 'none';
+    } else {
+        emptyState.style.display = 'none';
+        table.style.display = '';
+    }
     document.getElementById('selectAll').checked = false;
     updateBatchBar();
     renderPagination(data.total, data.page, data.limit);
@@ -197,6 +222,15 @@ function renderPagination(total, page, limit) {
     const pages = Math.ceil(total / limit);
     const el = document.getElementById('pagination');
     el.replaceChildren();
+    const infoEl = document.getElementById('paginationInfo');
+    if (total > 0) {
+        const start = (page - 1) * limit + 1;
+        const end = Math.min(page * limit, total);
+        infoEl.textContent = '第 ' + start + '-' + end + ' 条，共 ' + total + ' 条';
+        infoEl.style.display = '';
+    } else {
+        infoEl.style.display = 'none';
+    }
     if (pages <= 1) return;
     if (page > 1) el.appendChild(createPageButton('上一页', () => loadAssets(page - 1)));
     for (let i = 1; i <= pages; i += 1) {
@@ -223,8 +257,16 @@ function toggleSelectAll(cb) {
 
 function updateBatchBar() {
     const checked = document.querySelectorAll('.asset-checkbox:checked');
-    document.getElementById('selectedCount').textContent = checked.length;
-    document.getElementById('batchBar').style.display = checked.length > 0 ? 'flex' : 'none';
+    const total = document.querySelectorAll('.asset-checkbox').length;
+    const btn = document.getElementById('batchLabelBtn');
+    const hint = document.getElementById('batchHint');
+    if (total === 0) {
+        document.getElementById('batchBar').style.display = 'none';
+        return;
+    }
+    document.getElementById('batchBar').style.display = 'flex';
+    btn.disabled = checked.length === 0;
+    hint.textContent = checked.length > 0 ? checked.length + ' 项已选' : '请先勾选资产';
 }
 
 function escapePrintText(value) {
@@ -235,22 +277,22 @@ function buildPrintLabel(asset, fields, logoUrl) {
     const values = fields.map(field => {
         if (field === 'name') return '';
         const value = field === 'holder' ? asset.holder_name : asset[field];
-        return value ? `<div class="label-field">${escapePrintText(labelFieldLabels[field] || field)}：${escapePrintText(value)}</div>` : '';
+        const label = field === 'serial_number' ? 'SN' : (labelFieldLabels[field] || field);
+        return value ? `<div class="field">${escapePrintText(label)}：${escapePrintText(value)}</div>` : '';
     }).join('');
-    const logo = logoUrl ? `<img src="${escapePrintText(logoUrl)}" class="label-logo" alt="Logo">` : '<div class="label-logo-text">IT</div>';
+    const logo = logoUrl ? `<img src="${escapePrintText(logoUrl)}" class="logo-img" alt="Logo">` : '<div class="logo-text">IT</div>';
     return `<div class="label-card">
         <div class="label-top">
-            ${logo}
-            <div class="label-meta">
-                <div class="label-name">${escapePrintText(asset.name)}</div>
-                <div class="label-asset-tag">${escapePrintText(asset.asset_tag)}</div>
-                ${asset.serial_number ? `<div class="label-field">SN：${escapePrintText(asset.serial_number)}</div>` : ''}
+            <div class="logo-box">${logo}</div>
+            <div class="label-text">
+                ${fields.includes('name') ? `<div class="name">${escapePrintText(asset.name)}</div>` : ''}
+                <div class="tag">${escapePrintText(asset.asset_tag)}</div>
                 ${values}
             </div>
         </div>
         <div class="label-bottom">
-            <div class="label-number">${escapePrintText(String(asset.asset_tag || asset.id || '').replace(/\\D/g, '').slice(-7) || String(asset.id || '-'))}</div>
-            <img src="/api/assets/${asset.id}/qr" class="label-qr" alt="QR">
+            <div class="num">${escapePrintText(String(asset.asset_tag || asset.id || '').replace(/\\D/g, '').slice(-7) || String(asset.id || '-'))}</div>
+            <div class="qr-wrap"><img src="/api/assets/${asset.id}/qr" alt="QR"></div>
         </div>
     </div>`;
 }
@@ -263,10 +305,34 @@ async function batchPrintLabels() {
         apiFetch('/api/settings/label'),
         apiFetch('/api/settings/logo'),
     ]);
-    const fields = settings.fields || ['name'];
+    const fields = settings.fields || ['name', 'serial_number'];
     const logoUrl = logoData.logo || '';
     const printWindow = window.open('', '_blank');
-    const labelStyle = `*{margin:0;padding:0;box-sizing:border-box}body{background:#f8fafc;font-family:sans-serif;padding:16px}.no-print{margin-bottom:16px}.label-card{width:60mm;height:40mm;border:1px dashed #64748b;border-radius:4px;padding:3mm;display:inline-flex;flex-direction:column;justify-content:space-between;background:#fff;margin:8px;page-break-inside:avoid;color:#0f172a;line-height:1.2}.label-top{display:flex;align-items:center;gap:3mm;min-width:0}.label-logo{width:32px;height:32px;object-fit:contain;flex-shrink:0}.label-logo-text{width:32px;height:32px;border:1px solid #e2e8f0;border-radius:4px;color:#2563eb;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0}.label-meta{min-width:0;overflow:hidden}.label-name{font-size:12px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.label-asset-tag,.label-field{font-size:9px;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#64748b}.label-bottom{display:flex;align-items:flex-end;justify-content:space-between;gap:3mm}.label-number{font-size:18px;font-weight:900}.label-qr{width:20mm;height:20mm;border:1px solid #e2e8f0;padding:2px;flex-shrink:0}@media print{.no-print{display:none!important}body{background:#fff;padding:0}.label-card{border:1px solid #000;margin:0}@page{size:60mm 40mm;margin:0}}`;
+    const labelStyle = `
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;padding:16px;color:#0f172a}
+.no-print{margin-bottom:16px}
+.no-print button{height:36px;padding:0 16px;border-radius:8px;border:1px solid #e2e8f0;background:#2563eb;color:#fff;font-weight:600;cursor:pointer;font-size:14px}
+.label-card{width:60mm;height:40mm;padding:2mm;display:inline-flex;flex-direction:column;justify-content:space-between;background:#fff;border:1px dashed #94a3b8;border-radius:4px;margin:8px;break-inside:avoid;page-break-inside:avoid;line-height:1.15;overflow:hidden}
+.label-top{display:flex;align-items:center;gap:2mm;min-width:0}
+.logo-box{width:11mm;height:11mm;border:0.3mm solid #e2e8f0;border-radius:1mm;display:flex;align-items:center;justify-content:center;flex-shrink:0;overflow:hidden;font-size:4mm;font-weight:900;color:#2563eb}
+.logo-box img{width:100%;height:100%;object-fit:contain}
+.logo-text{width:100%;height:100%;display:flex;align-items:center;justify-content:center}
+.label-text{min-width:0;overflow:hidden;flex:1}
+.label-text .name{font-size:3.8mm;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.label-text .tag{font-size:2.8mm;font-weight:600;color:#2563eb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.label-text .field{font-size:2.5mm;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3}
+.label-bottom{display:flex;align-items:flex-end;justify-content:space-between}
+.num{font-size:7mm;font-weight:900;letter-spacing:0.2mm;line-height:1}
+.qr-wrap{width:20mm;height:20mm;border:0.3mm solid #e2e8f0;padding:0.5mm;flex-shrink:0}
+.qr-wrap img{width:100%;height:100%;object-fit:contain}
+@media print{
+  html,body{margin:0;padding:0;background:#fff;width:auto;height:auto;overflow:hidden}
+  .no-print{display:none!important}
+  .label-card{display:flex;width:57.6mm;height:37.6mm;margin:1.1mm;padding:2mm;border:none;border-radius:0;break-after:page;page-break-after:always}
+  .label-card:last-child{break-after:auto;page-break-after:auto}
+  @page{size:60mm 40mm;margin:0}
+}`;
     const labels = data.assets.map(asset => buildPrintLabel(asset, fields, logoUrl)).join('');
     printWindow.document.write(`<html><head><meta charset="UTF-8"><title>批量标签</title><style>${labelStyle}</style></head><body><div class="no-print"><button onclick="window.print()">打印标签</button></div>${labels}</body></html>`);
     printWindow.document.close();
@@ -348,10 +414,10 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     document.getElementById('categoryFilter').addEventListener('change', () => loadAssets());
     document.getElementById('statusTabs').addEventListener('click', event => {
-        const tab = event.target.closest('.status-tab');
+        const tab = event.target.closest('.tab-btn');
         if (!tab) return;
         currentStatus = tab.dataset.status || '';
-        document.querySelectorAll('.status-tab').forEach(item => item.classList.toggle('active', item === tab));
+        document.querySelectorAll('.tab-btn').forEach(item => item.classList.toggle('active', item === tab));
         loadAssets();
     });
     document.getElementById('asset-table-body').addEventListener('click', event => {

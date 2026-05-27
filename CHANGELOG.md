@@ -1,5 +1,46 @@
 # 改动历史
 
+## 2026-05-26：标签打印优化、资产台账与抽屉 UI 重构
+
+### 标签打印优化
+- 打印尺寸修复：标签内容从 60×40mm 缩小为 58×38mm + 1mm 安全边距，解决打印时内容溢出到第二页和触碰纸张边缘的问题。
+- 单位体系统一：标签内所有元素（Logo 11mm、标题 3.8mm、标签号 2.8mm、数字编号 7mm、QR 20mm）统一使用 mm 单位，不再混用 px。
+- 打印 CSS 修复：从 `visibility: hidden` 方案改为 `display: none` / `display: contents`，避免隐藏元素占空间导致布局问题。
+- `@media print` 中强制 `html, body { margin: 0; padding: 0; width: 100%; height: 100% }`。
+
+### 资产台账 UI 重构（按 Gemini demo 实现）
+- 工具栏：`.asset-toolbar` → `.toolbar`，状态筛选 `.status-tabs` → `.filter-tabs` / `.tab-btn`，类别筛选改为 `.category-select`，搜索框改为 `.search-wrapper` / `.search-input`。
+- 表格：`.asset-data-table` → `.ledger-table`，列宽微调，新增 `.tag-link`、`.opt-link`、`.status-badge` 样式。
+- 分页：改为 `.pagination-wrapper` > `.pagination-row` + `.pagination-info` 结构。
+- 批量操作栏：新增 `.batch-info`、`.btn-batch-action` 样式类。
+
+### 详情抽屉重构
+- 抽屉结构从直接 padding 改为 `.drawer-body` 子容器滚动，新增 `.drawer-icon-banner`（48px emoji 横幅替代 CSS 绘制显示器）、`.drawer-tools`（4 列 grid 按钮组）、`.info-mini-grid` / `.info-mini-card`（双列属性卡片）、`.mini-timeline`（简洁时间线）、`.label-preview-box`（虚线框标签预览）。
+- 旧类名保留为兼容别名（`.drawer-toolbar`、`.drawer-meta-grid` 等），不影响其他页面。
+
+### 墨粉管理增强
+- Tab 导航：墨粉总览 / 更换历史 / 成本分析三个 Tab 页签。
+- 更换历史：新增 `GET /api/consumables/replacements` 全局更换记录 API（支持按打印机/颜色/日期范围筛选）。
+- 成本分析：新增 `GET /api/consumables/cost-summary` 聚合成本 API（总花费/更换次数/加权日均/按打印机汇总/月度趋势）。
+- 墨粉自动命名：`POST /api/consumables` 的 `name` 字段改为可选，未提供时自动生成 `{打印机名} - {颜色中文}`。
+- 黑白打印机颜色锁定：`openCreateForPrinter()` 根据 `printer_type` 自动锁定颜色选项。
+
+### 测试
+- `.venv/bin/python -m pytest tests/ -q` → 192 passed。
+
+## 2026-05-25：墨粉管理、用户管理与文档同步
+
+本轮把文档同步到当前未提交实现，重点覆盖打印机墨粉管理和用户管理：
+
+- 墨粉管理：新增 `printer_consumable` 和 `consumable_replacement`，采用以打印机为中心的轻量 slot 模型，支持颜色/型号/当前价格/安装日期/库存阈值、库存调整、更替历史、使用天数和日均成本。
+- 打印机聚合视图：新增 `/api/printers/consumables`，按打印机分组返回墨粉 slot，支持彩色/黑白筛选和低库存筛选，并排除标签打印机。
+- 墨粉管理页面：新增 `/consumables` 与 `templates/admin/consumables.html`，采用打印机卡片 + 详情面板布局。
+- 用户管理：新增 `/users` 与 `templates/admin/users.html`，支持用户创建、编辑、角色调整、密码重置和删除。
+- 用户安全保护：删除用户时服务端保护不能删自己、不能删最后一个管理员、不能删仍持有未归还资产的用户；用户 API 不暴露 `password_hash`。
+- 资产列表易用性：补充空状态、批量标签禁用提示、分页范围说明、CSV 导入说明等约定。
+- 文档：更新 `README.md`、`CLAUDE.md`、`docs/frontend-design-spec.md` 与本 CHANGELOG，使页面/API/测试数量与当前代码一致。
+- 验证：`.venv/bin/python -m pytest tests/ -q` → 158 passed。
+
 ## 2026-05-21：文本对齐、标签打印与侧边栏展开
 
 本轮修复前端 UI 问题：
@@ -25,7 +66,7 @@
 - 资产台账：`templates/admin/assets.html` 改为状态 Tabs、无垂直线 `.asset-data-table`、搜索/筛选工具栏、行点击事件代理打开右侧详情抽屉。
 - 详情抽屉：`base.html` 内 `openAssetDetailDrawer(id)` 使用 `/api/assets/<id>`，安全 DOM 构造资产信息、工具栏、元数据、生命周期时间线和标签预览。
 - 员工资产页：`templates/employee/my_assets.html` 改为移动端卡片、分类色条和底部扫码 FAB。
-- 标签设计：单标签、批量标签、设置页预览、资产抽屉预览统一为 60mm×40mm 的 Logo + 资产信息 + 数字编号 + QR；明确移除一维码/模拟条码。
+- 标签设计：单标签、批量标签、设置页预览、资产抽屉预览统一为 60mm×40mm 的 Logo + 资产信息 + 数字编号 + QR。
 - Logo 修复：修复 `POST /api/settings/logo` 中 `_os.abspath` 拼写错误；上传后路径保存为 `/static/uploads/company_logo.*`，设置页预览、单标签页、批量标签和抽屉预览都会读取显示。
 - 打印修复：`templates/admin/label.html` 的 `@media print` 显示 `#labelContent`，避免父容器隐藏导致打印空白。
 - 测试：新增企业 Logo 上传回归测试。当前验证：`.venv/bin/python -m pytest tests/ -q` → 61 passed；headless Chromium 检查 `/dashboard`、`/assets`、`/settings`、资产抽屉、`/my/assets` 关键 DOM 正常。

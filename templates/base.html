@@ -19,6 +19,8 @@
                 <a href="/assets" class="menu-item {% if request.path.startswith('/assets') %}active{% endif %}" aria-label="资产台账"><span class="icon-asset"></span>资产台账</a>
                 <a href="/applications" class="menu-item {% if request.path == '/applications' %}active{% endif %}" aria-label="申请审核"><span class="icon-app"></span>申请审核</a>
                 <a href="/maintenance" class="menu-item {% if request.path == '/maintenance' %}active{% endif %}" aria-label="维修总览"><span class="icon-maint"></span>维修总览</a>
+                <a href="/consumables" class="menu-item {% if request.path == '/consumables' %}active{% endif %}" aria-label="墨粉管理"><span class="icon-consumable"></span>墨粉管理</a>
+                <a href="/users" class="menu-item {% if request.path == '/users' %}active{% endif %}" aria-label="用户管理"><span class="icon-users"></span>用户管理</a>
                 <a href="/activity" class="menu-item {% if request.path == '/activity' %}active{% endif %}" aria-label="操作记录"><span class="icon-log"></span>操作记录</a>
                 <a href="/settings" class="menu-item {% if request.path == '/settings' %}active{% endif %}" aria-label="系统设置"><span class="icon-set"></span>系统设置</a>
             </nav>
@@ -104,9 +106,9 @@
     }
 
     function appendMetaItem(grid, label, value) {
-        const item = makeEl('div', 'drawer-meta-item');
-        item.appendChild(makeEl('span', 'drawer-meta-label', label));
-        item.appendChild(makeEl('strong', 'drawer-meta-value', value || '-'));
+        const item = makeEl('div', 'info-mini-card');
+        item.appendChild(makeEl('div', 'mini-label', label));
+        item.appendChild(makeEl('div', 'mini-value', value || '-'));
         grid.appendChild(item);
     }
 
@@ -132,6 +134,8 @@
     }
 
     function createPhysicalLabel(asset, qrSrc, options = {}) {
+        const fields = Array.isArray(options.fields) ? options.fields : ['name', 'serial_number'];
+        const fieldLabels = {name:'资产名称',serial_number:'序列号',brand:'品牌',model:'型号',holder:'持有人',location:'位置'};
         const label = makeEl('div', `physical-label-preview${options.compact ? ' is-compact' : ''}`);
         const header = makeEl('div', 'label-header');
         const logo = makeEl('div', 'label-logo-placeholder');
@@ -145,9 +149,17 @@
             logo.textContent = 'IT';
         }
         const meta = makeEl('div', 'label-meta-tags');
-        meta.appendChild(makeEl('div', 'label-title-text', asset.name || '-'));
+        if (fields.includes('name')) {
+            meta.appendChild(makeEl('div', 'label-title-text', asset.name || '-'));
+        }
         meta.appendChild(makeEl('div', 'label-tag-sn', asset.asset_tag || '-'));
-        if (asset.serial_number) meta.appendChild(makeEl('div', 'label-tag-sn', 'SN: ' + asset.serial_number));
+        fields.forEach(field => {
+            if (field === 'name') return;
+            const value = field === 'holder' ? asset.holder_name : asset[field];
+            if (!value) return;
+            const labelText = field === 'serial_number' ? 'SN' : (fieldLabels[field] || field);
+            meta.appendChild(makeEl('div', 'label-tag-sn sn-field', `${labelText}: ${value}`));
+        });
         header.append(logo, meta);
 
         const footer = makeEl('div', 'label-footer-zone');
@@ -187,72 +199,93 @@
         if (drawer) drawer.classList.remove('is-open');
     }
 
+    const drawerCatEmojis = {computer:'\u{1F4BB}', monitor:'\u{1F5A5}', phone:'\u{1F4F1}', tablet:'\u{1F4CB}', printer:'\u{1F5A8}', server:'\u{1F5C4}', network:'\u{1F310}', firewall:'\u{1F6E1}', switch:'\u{1F500}'};
+
+    function appendMiniCard(grid, label, value) {
+        const card = makeEl('div', 'info-mini-card');
+        card.appendChild(makeEl('div', 'mini-label', label));
+        card.appendChild(makeEl('div', 'mini-value', value || '-'));
+        grid.appendChild(card);
+    }
+
     function renderDrawerContent(asset) {
         const drawer = document.getElementById('global-detail-drawer');
         if (!drawer) return;
+
+        const body = makeEl('div', 'drawer-body');
+
         const header = makeEl('div', 'drawer-header');
-        const titleWrap = makeEl('div');
-        titleWrap.appendChild(makeEl('span', 'drawer-eyebrow', asset.asset_tag));
-        titleWrap.appendChild(makeEl('h3', 'drawer-title', asset.name));
-        const close = makeEl('button', 'icon-button drawer-close');
+        header.appendChild(makeEl('div', 'drawer-eyebrow', asset.asset_tag));
+        header.appendChild(makeEl('div', 'drawer-title', asset.name));
+        const close = makeEl('button', 'drawer-close');
         close.type = 'button';
         close.dataset.drawerClose = 'true';
         close.setAttribute('aria-label', '关闭');
         close.textContent = '×';
-        header.append(titleWrap, close);
+        header.appendChild(close);
 
-        const visual = makeEl('div', 'drawer-asset-visual');
-        visual.appendChild(makeEl('span', 'asset-visual-code', drawerCatIcons[asset.category] || 'IT'));
+        const banner = makeEl('div', 'drawer-icon-banner');
+        banner.textContent = drawerCatEmojis[asset.category] || '\u{1F4E6}';
 
-        const toolbar = makeEl('div', 'drawer-toolbar');
-        const edit = makeEl('a', 'btn btn-secondary btn-sm', '编辑');
+        const tools = makeEl('div', 'drawer-tools');
+        const edit = makeEl('a', 'btn btn-tool', '编辑');
         edit.href = `/assets/${asset.id}/edit`;
-        const action = makeEl('a', 'btn btn-primary btn-sm', asset.status === 'in_stock' ? '领用' : '操作');
+        const action = makeEl('a', 'btn btn-tool btn-primary', asset.status === 'in_stock' ? '领用' : '操作');
         action.href = `/assets/${asset.id}`;
-        const label = makeEl('a', 'btn btn-secondary btn-sm', '标签');
-        label.href = `/assets/${asset.id}/label`;
-        label.target = '_blank';
-        const del = makeEl('button', 'btn btn-danger btn-sm', '删除');
+        const lbl = makeEl('a', 'btn btn-tool', '标签');
+        lbl.href = `/assets/${asset.id}/label`;
+        lbl.target = '_blank';
+        const del = makeEl('button', 'btn btn-tool', '删除');
         del.type = 'button';
         del.dataset.drawerDelete = asset.id;
         del.disabled = asset.status !== 'in_stock';
-        toolbar.append(edit, action, label, del);
+        del.style.color = 'var(--color-danger)';
+        del.style.borderColor = 'var(--color-danger)';
+        if (del.disabled) { del.style.opacity = '0.4'; del.style.cursor = 'not-allowed'; }
+        tools.append(edit, action, lbl, del);
 
-        const status = makeEl('span', `badge ${drawerStatusClasses[asset.status] || ''}`.trim(), drawerStatusLabels[asset.status] || asset.status);
-        const metaGrid = makeEl('div', 'drawer-meta-grid');
-        appendMetaItem(metaGrid, '类别', drawerCatLabels[asset.category] || asset.category);
-        appendMetaItem(metaGrid, '品牌', asset.brand);
-        appendMetaItem(metaGrid, '型号', asset.model);
-        appendMetaItem(metaGrid, '序列号', asset.serial_number);
-        appendMetaItem(metaGrid, '持有人', asset.holder_name);
-        appendMetaItem(metaGrid, '位置', asset.location);
-        appendMetaItem(metaGrid, '购入日期', asset.purchase_date);
-        appendMetaItem(metaGrid, '保修到期', asset.warranty_date);
+        const infoTitle = makeEl('h3', 'drawer-section-title', '基本属性');
+        const metaGrid = makeEl('div', 'info-mini-grid');
+        appendMiniCard(metaGrid, '类别', drawerCatLabels[asset.category] || asset.category);
+        appendMiniCard(metaGrid, '品牌', asset.brand);
+        appendMiniCard(metaGrid, '型号', asset.model);
+        appendMiniCard(metaGrid, '序列号', asset.serial_number);
+        appendMiniCard(metaGrid, '当前持有人', asset.holder_name);
+        appendMiniCard(metaGrid, '存放位置', asset.location);
+        appendMiniCard(metaGrid, '购入日期', asset.purchase_date);
+        appendMiniCard(metaGrid, '保修到期', asset.warranty_date);
 
-        const timelineSection = makeEl('section', 'drawer-section');
-        timelineSection.appendChild(makeEl('h4', '', '生命周期'));
-        const timeline = makeEl('div', 'vertical-timeline');
+        const tlTitle = makeEl('h3', 'drawer-section-title', '生命周期');
+        const timeline = makeEl('div', 'mini-timeline');
         if (asset.events && asset.events.length) {
             asset.events.forEach(event => timeline.appendChild(createTimelineNode(event)));
         } else {
             timeline.appendChild(makeEl('p', 'text-muted', '暂无生命周期事件'));
         }
-        timelineSection.appendChild(timeline);
 
-        const labelSection = makeEl('section', 'drawer-section');
-        labelSection.appendChild(makeEl('h4', '', '标签预览'));
+        const labelTitle = makeEl('h3', 'drawer-section-title', '标签预览 (60×40mm)');
+        labelTitle.style.marginTop = '24px';
+        const labelBox = makeEl('div', 'label-preview-box');
         const logoValue = window.__assetLabelLogo || '';
+        const labelFields = window.__assetLabelFields || ['name', 'serial_number'];
         if (logoValue) {
-            labelSection.appendChild(createPhysicalLabel(asset, `/api/assets/${asset.id}/qr`, {compact: true, logoUrl: logoValue}));
+            labelBox.appendChild(createPhysicalLabel(asset, `/api/assets/${asset.id}/qr`, {compact: true, logoUrl: logoValue, fields: labelFields}));
         } else {
-            labelSection.appendChild(createPhysicalLabel(asset, `/api/assets/${asset.id}/qr`, {compact: true}));
+            labelBox.appendChild(createPhysicalLabel(asset, `/api/assets/${asset.id}/qr`, {compact: true, fields: labelFields}));
             apiFetch('/api/settings/logo').then(logoData => {
                 window.__assetLabelLogo = logoData.logo || '';
                 if (window.__assetLabelLogo) renderDrawerContent(asset);
             }).catch(() => {});
         }
+        if (!window.__assetLabelFields) {
+            apiFetch('/api/settings/label').then(labelData => {
+                window.__assetLabelFields = labelData.fields || ['name', 'serial_number'];
+                renderDrawerContent(asset);
+            }).catch(() => {});
+        }
 
-        drawer.replaceChildren(header, visual, toolbar, status, metaGrid, timelineSection, labelSection);
+        body.append(header, banner, tools, infoTitle, metaGrid, tlTitle, timeline, labelTitle, labelBox);
+        drawer.replaceChildren(body);
     }
 
     document.addEventListener('DOMContentLoaded', () => {

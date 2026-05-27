@@ -1,0 +1,993 @@
+{% extends "base.html" %}
+{% block title %}墨粉管理 — IT 资产管理{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title" data-page-title="consumables">墨粉管理</h1>
+        <p class="page-subtitle">以打印机为主入口 · 彩色机 / 黑白机分流 · 标签打印机不纳入墨粉管理</p>
+    </div>
+</div>
+
+<div class="cs-tabs">
+    <button type="button" class="cs-tab active" data-tab="overview">墨粉总览</button>
+    <button type="button" class="cs-tab" data-tab="history">更换历史</button>
+    <button type="button" class="cs-tab" data-tab="cost">成本分析</button>
+</div>
+
+<!-- Tab: 墨粉总览 -->
+<div class="cs-tab-content" data-tab-panel="overview">
+    <div class="cs-filter-chips">
+        <button type="button" class="cs-chip active" data-filter="all">全部打印机</button>
+        <button type="button" class="cs-chip" data-filter="color">彩色打印机</button>
+        <button type="button" class="cs-chip" data-filter="mono">黑白打印机</button>
+        <button type="button" class="cs-chip" data-filter="warning">告警中</button>
+    </div>
+
+    <div class="cs-grid">
+        <!-- Left: Printer Card List -->
+        <section class="cs-panel" data-section="printer-card-list">
+            <div class="cs-panel-head">
+                <div>
+                    <h2 class="cs-panel-title">打印机卡片</h2>
+                    <small class="cs-panel-hint">点击卡片查看墨粉详情</small>
+                </div>
+                <div class="cs-panel-stat" id="printerCount">{{ printers_data|length }} 台打印机</div>
+            </div>
+            <div class="cs-cards" id="printerCardGrid">
+                {% for p in printers_data %}
+                <div class="cs-device{% if p.has_warning %} cs-device-warning{% elif p.printer_type == 'color' %} cs-device-color{% endif %}"
+                     data-asset-id="{{ p.asset_id }}"
+                     data-printer-type="{{ p.printer_type }}"
+                     data-has-warning="{{ 'true' if p.has_warning else 'false' }}">
+                    <div class="cs-device-row">
+                        <div>
+                            <h3 class="cs-device-name">{{ p.printer_name | e }}</h3>
+                            <div class="cs-device-meta">
+                                资产编号：{{ p.asset_tag | e }}<br>
+                                类型：{{ '彩色打印机' if p.printer_type == 'color' else ('黑白打印机' if p.printer_type == 'mono' else '未配置') }}
+                            </div>
+                        </div>
+                        {% if p.has_warning %}
+                        <span class="cs-tag cs-tag-amber">告警</span>
+                        {% elif p.total_slots == 0 %}
+                        <span class="cs-tag cs-tag-gray">待配置</span>
+                        {% elif p.printer_type == 'color' %}
+                        <span class="cs-tag cs-tag-blue">彩色</span>
+                        {% else %}
+                        <span class="cs-tag cs-tag-gray">黑白</span>
+                        {% endif %}
+                    </div>
+                    <div class="cs-device-status">
+                        <div>
+                            {% if p.total_slots == 0 %}
+                            <div class="cs-warn-text">尚未配置墨粉</div>
+                            {% elif p.has_warning %}
+                            <div class="cs-warn-text">{{ p.low_stock_count }} 个槽位低于阈值</div>
+                            {% else %}
+                            <div class="cs-ok-text">墨粉正常</div>
+                            {% endif %}
+                        </div>
+                        <button type="button" class="cs-btn cs-btn-primary cs-btn-view"
+                                data-asset-id="{{ p.asset_id }}">查看详情</button>
+                    </div>
+                </div>
+                {% else %}
+                <div class="cs-empty">
+                    <p class="cs-empty-text">暂无打印机</p>
+                    <p class="cs-empty-hint">请先在资产台账中添加打印机</p>
+                </div>
+                {% endfor %}
+            </div>
+        </section>
+
+        <!-- Right: Printer Detail Drawer -->
+        <section class="cs-panel" data-section="printer-detail-drawer" id="printerDetailPanel">
+            <div class="cs-panel-head">
+                <div>
+                    <h2 class="cs-panel-title" id="drawerPrinterTitle">打印机详情</h2>
+                    <small class="cs-panel-hint" id="drawerPrinterHint">选择左侧打印机查看墨粉详情</small>
+                </div>
+                <div class="cs-printer-tags" id="drawerPrinterTags"></div>
+            </div>
+            <div class="cs-detail" id="drawerDetailContent">
+                <div class="cs-empty">
+                    <p class="cs-empty-text">请选择一台打印机</p>
+                    <p class="cs-empty-hint">点击左侧卡片查看墨粉详情</p>
+                </div>
+            </div>
+        </section>
+    </div>
+</div>
+
+<!-- Tab: 更换历史 -->
+<div class="cs-tab-content" data-tab-panel="history" style="display:none;">
+    <div class="cs-panel">
+        <div class="cs-panel-head">
+            <div>
+                <h2 class="cs-panel-title">全局更换历史</h2>
+                <small class="cs-panel-hint">所有打印机的墨粉更替记录</small>
+            </div>
+            <div class="cs-panel-stat" id="historyCount"></div>
+        </div>
+        <div class="cs-detail" id="historyTableWrap">
+            <div class="cs-empty">
+                <p class="cs-empty-text">加载中...</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Tab: 成本分析 -->
+<div class="cs-tab-content" data-tab-panel="cost" style="display:none;">
+    <div id="costContent">
+        <div class="cs-empty">
+            <p class="cs-empty-text">加载中...</p>
+        </div>
+    </div>
+</div>
+
+<!-- Inject printer data JSON -->
+<script type="application/json" data-printer-consumables-json>
+{{ printers_data | tojson }}
+</script>
+
+<!-- 新增墨粉弹窗 -->
+<div id="consumableModal" class="modal" style="display:none;">
+    <div class="modal-content" data-modal="consumable-form">
+        <h3 id="modalTitle">新增墨粉</h3>
+        <form id="consumableForm" autocomplete="off">
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="cColor">颜色 *</label>
+                    <select id="cColor" name="color" required>
+                        <option value="black">黑色</option>
+                        <option value="cyan">青色</option>
+                        <option value="magenta">品红</option>
+                        <option value="yellow">黄色</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="cModel">墨粉类型</label>
+                    <select id="cModel" name="model">
+                        <option value="">未选择</option>
+                        <option value="原装">原装</option>
+                        <option value="国产">国产</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="cStock">备用库存数量</label>
+                    <input type="number" id="cStock" name="stock" value="0" min="0">
+                </div>
+                <div class="form-group">
+                    <label for="cThreshold">预警阈值</label>
+                    <input type="number" id="cThreshold" name="threshold" value="0" min="0">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="cPrice">当前价格 (元)</label>
+                    <input type="number" id="cPrice" name="current_price" step="0.01" min="0" placeholder="如 320.5">
+                </div>
+                <div class="form-group">
+                    <label for="cInstalled">安装日期</label>
+                    <input type="date" id="cInstalled" name="installed_at">
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="cNotes">备注</label>
+                <textarea id="cNotes" name="notes" rows="2"></textarea>
+            </div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
+                <button type="button" class="btn btn-secondary" id="btnCancelModal">取消</button>
+                <button type="submit" class="btn btn-primary" id="btnSubmitForm">保存</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- 库存调整弹窗 -->
+<div id="adjustModal" class="modal" style="display:none;">
+    <div class="modal-content" data-modal="adjust-stock">
+        <h3>库存调整</h3>
+        <p id="adjustInfo" style="margin-bottom:12px;color:var(--color-text-muted);font-size:14px;"></p>
+        <form id="adjustForm" autocomplete="off">
+            <input type="hidden" id="aId">
+            <div class="form-group">
+                <label for="aDelta">调整数量（正数入库，负数出库）</label>
+                <input type="number" id="aDelta" name="delta" value="1" required>
+            </div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
+                <button type="button" class="btn btn-secondary" id="btnCancelAdjust">取消</button>
+                <button type="submit" class="btn btn-primary">确认调整</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- 更换墨粉弹窗 -->
+<div id="replaceModal" class="modal" style="display:none;">
+    <div class="modal-content" data-modal="replace-consumable">
+        <h3>更换墨粉</h3>
+        <p id="replaceInfo" style="margin-bottom:12px;color:var(--color-text-muted);font-size:14px;"></p>
+        <form id="replaceForm" autocomplete="off">
+            <input type="hidden" id="rId">
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="rReplacedAt">更换日期 *</label>
+                    <input type="date" id="rReplacedAt" name="replaced_at" required>
+                </div>
+                <div class="form-group">
+                    <label for="rNewInstalled">新安装日期</label>
+                    <input type="date" id="rNewInstalled" name="new_installed_at">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="rNewPrice">新价格 (元)</label>
+                    <input type="number" id="rNewPrice" name="new_price" step="0.01" min="0" placeholder="如 320">
+                </div>
+                <div class="form-group">
+                    <label class="filter-check">
+                        <input type="checkbox" id="rUseStock" name="use_stock">
+                        <span>从备用库存取用（库存 -1）</span>
+                    </label>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="rReason">更换原因</label>
+                <select id="rReason" name="reason">
+                    <option value="">请选择</option>
+                    <option value="用尽">用尽</option>
+                    <option value="老化">老化</option>
+                    <option value="故障">故障</option>
+                    <option value="预防性更换">预防性更换</option>
+                    <option value="其他">其他</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="rNotes">备注</label>
+                <textarea id="rNotes" name="notes" rows="2" placeholder="可选备注"></textarea>
+            </div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
+                <button type="button" class="btn btn-secondary" id="btnCancelReplace">取消</button>
+                <button type="submit" class="btn btn-primary">确认更换</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- 更替历史弹窗 (单墨粉) -->
+<div id="historyModal" class="modal" style="display:none;">
+    <div class="modal-content" data-modal="replace-history" style="max-width:640px;">
+        <h3 id="historyTitle">更换历史</h3>
+        <div id="historyList" style="max-height:400px;overflow-y:auto;"></div>
+        <div style="display:flex;justify-content:flex-end;margin-top:16px;">
+            <button type="button" class="btn btn-secondary" id="btnCloseHistory">关闭</button>
+        </div>
+    </div>
+</div>
+
+<!-- 打印机类型设置弹窗 -->
+<div id="printerTypeModal" class="modal" style="display:none;">
+    <div class="modal-content" style="max-width:400px;">
+        <h3>设置打印机类型</h3>
+        <p id="ptInfo" style="margin-bottom:12px;color:var(--color-text-muted);font-size:14px;"></p>
+        <div style="display:flex;gap:12px;margin-top:16px;">
+            <button type="button" class="cs-config-btn" id="ptSetMono">黑白打印机</button>
+            <button type="button" class="cs-config-btn" id="ptSetColor">彩色打印机</button>
+        </div>
+        <div style="display:flex;justify-content:flex-end;margin-top:16px;">
+            <button type="button" class="btn btn-secondary" id="btnCancelPt">取消</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+    var COLOR_LABELS = {black:'黑色', cyan:'青色', magenta:'品红', yellow:'黄色'};
+    var COLOR_DOTS = {black:'cs-color-dot-black', cyan:'cs-color-dot-cyan', magenta:'cs-color-dot-magenta', yellow:'cs-color-dot-yellow'};
+
+    var printersData = [];
+    var jsonEl = document.querySelector('[data-printer-consumables-json]');
+    if (jsonEl) {
+        try { printersData = JSON.parse(jsonEl.textContent); } catch(e) { printersData = []; }
+    }
+
+    var editingId = null;
+    var printers = [];
+    var selectedPrinterId = null;
+    var activeFilter = 'all';
+    var activeTab = 'overview';
+
+    function today() {
+        var d = new Date();
+        return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+    }
+
+    // ---- Tab switching ----
+    document.querySelectorAll('.cs-tab[data-tab]').forEach(function(tab) {
+        tab.addEventListener('click', function() {
+            document.querySelectorAll('.cs-tab[data-tab]').forEach(function(t) { t.classList.remove('active'); });
+            tab.classList.add('active');
+            activeTab = tab.dataset.tab;
+            document.querySelectorAll('.cs-tab-content').forEach(function(p) { p.style.display = 'none'; });
+            var panel = document.querySelector('.cs-tab-content[data-tab-panel="' + activeTab + '"]');
+            if (panel) panel.style.display = '';
+            if (activeTab === 'history') loadHistoryTab();
+            if (activeTab === 'cost') loadCostTab();
+        });
+    });
+
+    // ---- Filter chips (overview tab only) ----
+    function applyFilters() {
+        var cards = document.querySelectorAll('.cs-device[data-asset-id]');
+        cards.forEach(function(card) {
+            var show = false;
+            if (activeFilter === 'all') show = true;
+            else if (activeFilter === 'color') show = card.dataset.printerType === 'color';
+            else if (activeFilter === 'mono') show = card.dataset.printerType === 'mono';
+            else if (activeFilter === 'warning') show = card.dataset.hasWarning === 'true';
+            card.style.display = show ? '' : 'none';
+        });
+    }
+
+    document.querySelectorAll('.cs-chip[data-filter]').forEach(function(chip) {
+        chip.addEventListener('click', function() {
+            document.querySelectorAll('.cs-chip[data-filter]').forEach(function(c) { c.classList.remove('active'); });
+            chip.classList.add('active');
+            activeFilter = chip.dataset.filter;
+            applyFilters();
+        });
+    });
+
+    // ---- Printer detail drawer ----
+    function renderDrawer(printer) {
+        var title = document.getElementById('drawerPrinterTitle');
+        var hint = document.getElementById('drawerPrinterHint');
+        var tags = document.getElementById('drawerPrinterTags');
+        var content = document.getElementById('drawerDetailContent');
+
+        title.textContent = printer.printer_name;
+        tags.innerHTML = '';
+        var typeTag = document.createElement('span');
+        typeTag.className = 'cs-tag ' + (printer.printer_type === 'color' ? 'cs-tag-blue' : 'cs-tag-gray');
+        typeTag.textContent = printer.printer_type === 'color' ? '彩色打印机' :
+            (printer.printer_type === 'mono' ? '黑白打印机' : '未配置类型');
+        tags.appendChild(typeTag);
+        var idTag = document.createElement('span');
+        idTag.className = 'cs-tag cs-tag-gray';
+        idTag.textContent = '资产编号 ' + printer.asset_tag;
+        tags.appendChild(idTag);
+
+        content.innerHTML = '';
+
+        // Printer type config banner
+        if (printer.printer_type === 'unconfigured') {
+            var banner = document.createElement('div');
+            banner.className = 'cs-config-banner';
+            var bP = document.createElement('p');
+            bP.textContent = '这台打印机尚未设置类型，请先设置为彩色或黑白打印机。';
+            var bBtn = document.createElement('button');
+            bBtn.type = 'button';
+            bBtn.className = 'cs-config-btn';
+            bBtn.textContent = '设置类型';
+            bBtn.addEventListener('click', function() { openPrinterTypeModal(printer); });
+            banner.appendChild(bP);
+            banner.appendChild(bBtn);
+            content.appendChild(banner);
+        }
+
+        // Summary banner
+        var banner2 = document.createElement('div');
+        banner2.className = 'cs-banner';
+        var bl = document.createElement('div');
+        var bt = document.createElement('h3');
+        bt.className = 'cs-banner-title';
+        bt.textContent = '墨粉槽位';
+        bl.appendChild(bt);
+        var bs = document.createElement('div');
+        bs.className = 'cs-summary';
+        var slotsBox = makeSummaryBox(printer.total_slots, '槽位');
+        var warnBox = makeSummaryBox(printer.low_stock_count, '低库存');
+        bs.appendChild(slotsBox);
+        bs.appendChild(warnBox);
+        banner2.appendChild(bl);
+        banner2.appendChild(bs);
+        content.appendChild(banner2);
+
+        // Slot cards
+        var slotsDiv = document.createElement('div');
+        slotsDiv.className = 'cs-slots';
+
+        if (!printer.consumables.length) {
+            var empty = document.createElement('div');
+            empty.className = 'cs-empty';
+            var ep = document.createElement('p');
+            ep.className = 'cs-empty-text';
+            ep.textContent = '这台打印机还没有墨粉槽位';
+            var addBtn = document.createElement('button');
+            addBtn.type = 'button';
+            addBtn.className = 'btn btn-primary';
+            addBtn.textContent = '添加墨粉';
+            addBtn.addEventListener('click', function() { openCreateForPrinter(printer); });
+            empty.appendChild(ep);
+            empty.appendChild(addBtn);
+            slotsDiv.appendChild(empty);
+        }
+
+        printer.consumables.forEach(function(slot) {
+            var price = slot.current_price != null ? Number(slot.current_price).toFixed(0) : '-';
+            var installed = slot.installed_at || '未记录';
+            var usageDays = slot.usage_days != null ? slot.usage_days : '-';
+            var dailyCost = slot.estimated_daily_cost != null ? slot.estimated_daily_cost.toFixed(2) : '-';
+            var isLow = slot.is_low_stock;
+            var modelLabel = slot.model || '-';
+            var colorKey = slot.color || 'black';
+
+            var slotEl = document.createElement('div');
+            slotEl.className = 'cs-slot';
+            slotEl.dataset.consumableId = slot.id;
+
+            // Head: color name + status
+            var head = document.createElement('div');
+            head.className = 'cs-slot-head';
+            var h4 = document.createElement('h4');
+            var dot = document.createElement('span');
+            dot.className = 'cs-color-dot ' + (COLOR_DOTS[colorKey] || '');
+            h4.appendChild(dot);
+            h4.appendChild(document.createTextNode(' ' + (COLOR_LABELS[colorKey] || colorKey)));
+            var badge = document.createElement('span');
+            badge.className = 'cs-tag ' + (isLow ? 'cs-tag-amber' : 'cs-tag-green');
+            badge.textContent = isLow ? '低库存' : '正常';
+            head.appendChild(h4);
+            head.appendChild(badge);
+
+            // Section: 在用
+            var inUse = document.createElement('div');
+            inUse.className = 'cs-slot-section in-use';
+            var inLabel = document.createElement('div');
+            inLabel.className = 'cs-slot-section-label';
+            inLabel.textContent = '在用';
+            inUse.appendChild(inLabel);
+            var inRow = document.createElement('div');
+            inRow.className = 'cs-slot-detail-row';
+            appendDetailItem(inRow, '安装', installed);
+            appendDetailItem(inRow, '已用', usageDays + ' 天');
+            appendDetailItem(inRow, '价格', '¥' + price);
+            appendDetailItem(inRow, '日均', '¥' + dailyCost);
+            appendDetailItem(inRow, '型号', modelLabel);
+            inUse.appendChild(inRow);
+
+            // Section: 备用库存
+            var stockSec = document.createElement('div');
+            stockSec.className = 'cs-slot-section in-stock';
+            var stockLabel = document.createElement('div');
+            stockLabel.className = 'cs-slot-section-label';
+            stockLabel.textContent = '备用库存';
+            stockSec.appendChild(stockLabel);
+            var stockRow = document.createElement('div');
+            stockRow.className = 'cs-slot-detail-row';
+            var stockColor = (isLow && slot.threshold > 0) ? '#b45309' : 'inherit';
+            appendDetailItem(stockRow, '库存', slot.stock + ' 个', stockColor);
+            appendDetailItem(stockRow, '预警阈值', slot.threshold);
+            stockSec.appendChild(stockRow);
+
+            // Actions
+            var actions = document.createElement('div');
+            actions.className = 'cs-actions';
+            [['replace', 'cs-action cs-action-primary', '更换墨粉'],
+             ['history', 'cs-action', '查看历史'],
+             ['adjust', 'cs-action', '调整库存'],
+             ['edit', 'cs-action', '编辑']].forEach(function(btn) {
+                var b = document.createElement('button');
+                b.type = 'button';
+                b.className = btn[1];
+                b.dataset.action = btn[0];
+                b.dataset.cid = slot.id;
+                b.textContent = btn[2];
+                actions.appendChild(b);
+            });
+
+            slotEl.appendChild(head);
+            slotEl.appendChild(inUse);
+            slotEl.appendChild(stockSec);
+            slotEl.appendChild(actions);
+            slotsDiv.appendChild(slotEl);
+        });
+
+        // Add toner button (always visible when printer type is configured)
+        if (printer.printer_type !== 'unconfigured') {
+            var addSlotBtn = document.createElement('button');
+            addSlotBtn.type = 'button';
+            addSlotBtn.className = 'btn btn-primary';
+            addSlotBtn.style.marginTop = '12px';
+            addSlotBtn.textContent = '添加墨粉';
+            addSlotBtn.addEventListener('click', function() { openCreateForPrinter(printer); });
+            slotsDiv.appendChild(addSlotBtn);
+        }
+
+        content.appendChild(banner2);
+        content.appendChild(slotsDiv);
+
+        // Bind slot actions via delegation
+        content.querySelectorAll('[data-action]').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                var cid = parseInt(btn.dataset.cid);
+                var slotObj = printer.consumables.find(function(s) { return s.id === cid; });
+                if (!slotObj) return;
+                if (btn.dataset.action === 'replace') openReplace(slotObj);
+                else if (btn.dataset.action === 'history') openHistory(slotObj);
+                else if (btn.dataset.action === 'adjust') openAdjust(slotObj);
+                else if (btn.dataset.action === 'edit') openEdit(slotObj, printer);
+            });
+        });
+    }
+
+    function makeSummaryBox(value, label) {
+        var box = document.createElement('div');
+        box.className = 'cs-summary-box';
+        var num = document.createElement('div');
+        num.className = 'cs-summary-num';
+        num.textContent = value;
+        var lab = document.createElement('div');
+        lab.className = 'cs-summary-lab';
+        lab.textContent = label;
+        box.appendChild(num);
+        box.appendChild(lab);
+        return box;
+    }
+
+    function appendDetailItem(row, label, value, strongColor) {
+        var span = document.createElement('span');
+        span.appendChild(document.createTextNode(label + ': '));
+        var strong = document.createElement('strong');
+        if (strongColor) strong.style.color = strongColor;
+        strong.textContent = value;
+        span.appendChild(strong);
+        row.appendChild(span);
+    }
+
+    // Click handler for printer cards
+    document.getElementById('printerCardGrid').addEventListener('click', function(e) {
+        var card = e.target.closest('.cs-device[data-asset-id]');
+        var viewBtn = e.target.closest('.cs-btn-view[data-asset-id]');
+        var assetId = viewBtn ? parseInt(viewBtn.dataset.assetId) :
+                      (card ? parseInt(card.dataset.assetId) : null);
+        if (!assetId) return;
+        document.querySelectorAll('.cs-device[data-asset-id]').forEach(function(c) { c.classList.remove('cs-device-selected'); });
+        if (card) card.classList.add('cs-device-selected');
+        selectedPrinterId = assetId;
+        var printer = printersData.find(function(p) { return p.asset_id === assetId; });
+        if (printer) renderDrawer(printer);
+    });
+
+    // ---- Printers list for modal ----
+    async function loadPrinters() {
+        try {
+            var data = await apiFetch('/api/assets?category=printer&per_page=200');
+            printers = data.assets || [];
+        } catch(e) { printers = []; }
+    }
+
+    // ---- Modal helpers ----
+    function openModal(id) { document.getElementById(id).style.display = ''; }
+    function closeModal() {
+        document.getElementById('consumableModal').style.display = 'none';
+        document.getElementById('consumableForm').reset();
+        editingId = null;
+    }
+    function closeAdjustModal() {
+        document.getElementById('adjustModal').style.display = 'none';
+        document.getElementById('adjustForm').reset();
+    }
+    function closeReplaceModal() {
+        document.getElementById('replaceModal').style.display = 'none';
+        document.getElementById('replaceForm').reset();
+    }
+    function closeHistoryModal() {
+        document.getElementById('historyModal').style.display = 'none';
+    }
+
+    function openCreateForPrinter(printer) {
+        editingId = null;
+        document.getElementById('consumableForm').reset();
+        document.getElementById('modalTitle').textContent = '添加墨粉 — ' + printer.printer_name;
+        document.getElementById('btnSubmitForm').textContent = '保存';
+
+        // Color dropdown: lock for mono, show all for color
+        var colorSelect = document.getElementById('cColor');
+        var colorRow = colorSelect.closest('.form-row') || colorSelect.closest('.form-group');
+        if (printer.printer_type === 'mono') {
+            colorSelect.innerHTML = '<option value="black" selected>黑色</option>';
+            colorSelect.disabled = true;
+        } else {
+            colorSelect.innerHTML = '<option value="black">黑色</option><option value="cyan">青色</option><option value="magenta">品红</option><option value="yellow">黄色</option>';
+            colorSelect.disabled = false;
+        }
+
+        // Store printer info for submit
+        document.getElementById('consumableForm').dataset.assetId = printer.asset_id;
+        document.getElementById('consumableForm').dataset.printerType = printer.printer_type;
+        document.getElementById('consumableForm').dataset.printerName = printer.printer_name;
+
+        openModal('consumableModal');
+    }
+
+    function openEdit(slot, printer) {
+        editingId = slot.id;
+        document.getElementById('modalTitle').textContent = '编辑墨粉 — ' + (COLOR_LABELS[slot.color] || '');
+        document.getElementById('btnSubmitForm').textContent = '更新';
+
+        var colorSelect = document.getElementById('cColor');
+        if (printer.printer_type === 'mono') {
+            colorSelect.innerHTML = '<option value="black" selected>黑色</option>';
+            colorSelect.disabled = true;
+        } else {
+            colorSelect.innerHTML = '<option value="black">黑色</option><option value="cyan">青色</option><option value="magenta">品红</option><option value="yellow">黄色</option>';
+            colorSelect.disabled = false;
+            colorSelect.value = slot.color || 'black';
+        }
+
+        document.getElementById('cModel').value = slot.model || '';
+        document.getElementById('cStock').value = slot.stock || 0;
+        document.getElementById('cThreshold').value = slot.threshold || 0;
+        document.getElementById('cPrice').value = slot.current_price != null ? slot.current_price : '';
+        document.getElementById('cInstalled').value = slot.installed_at || '';
+        document.getElementById('cNotes').value = slot.notes || '';
+
+        document.getElementById('consumableForm').dataset.assetId = printer.asset_id;
+        document.getElementById('consumableForm').dataset.printerType = printer.printer_type;
+        document.getElementById('consumableForm').dataset.printerName = printer.printer_name;
+
+        openModal('consumableModal');
+    }
+
+    function openAdjust(c) {
+        document.getElementById('aId').value = c.id;
+        var info = document.getElementById('adjustInfo');
+        info.textContent = '当前库存: ' + c.stock + ' 个，预警阈值: ' + c.threshold;
+        document.getElementById('aDelta').value = 1;
+        openModal('adjustModal');
+    }
+
+    function openReplace(c) {
+        document.getElementById('rId').value = c.id;
+        var info = document.getElementById('replaceInfo');
+        var colorLabel = COLOR_LABELS[c.color] || c.color || '';
+        info.textContent = colorLabel +
+            ' | 安装日期: ' + (c.installed_at || '未记录') +
+            ' | 当前价格: ' + (c.current_price != null ? '¥' + Number(c.current_price).toFixed(2) : '未记录') +
+            ' | 备用库存: ' + c.stock;
+        document.getElementById('rReplacedAt').value = today();
+        document.getElementById('rNewInstalled').value = today();
+        document.getElementById('rNewPrice').value = c.current_price != null ? c.current_price : '';
+        document.getElementById('rUseStock').checked = false;
+        document.getElementById('rReason').value = '';
+        document.getElementById('rNotes').value = '';
+        openModal('replaceModal');
+    }
+
+    async function openHistory(c) {
+        var colorLabel = COLOR_LABELS[c.color] || c.color || '';
+        document.getElementById('historyTitle').textContent = colorLabel + ' — 更替历史';
+        var listEl = document.getElementById('historyList');
+        listEl.replaceChildren();
+        try {
+            var data = await apiFetch('/api/consumables/' + c.id + '/replacements');
+            if (!data.replacements || data.replacements.length === 0) {
+                var ep = document.createElement('p');
+                ep.style.cssText = 'color:var(--color-text-muted);text-align:center;padding:24px;';
+                ep.textContent = '暂无更替记录';
+                listEl.appendChild(ep);
+            } else {
+                data.replacements.forEach(function(r) {
+                    var card = document.createElement('div');
+                    card.className = 'cs-history-card';
+                    var header = document.createElement('div');
+                    header.className = 'cs-history-header';
+                    var dateSpan = document.createElement('span');
+                    dateSpan.style.fontWeight = '600';
+                    dateSpan.textContent = '更换日期: ' + (r.replaced_at || '-');
+                    header.appendChild(dateSpan);
+                    var reasonBadge = document.createElement('span');
+                    reasonBadge.className = 'badge';
+                    reasonBadge.style.backgroundColor = 'rgba(0,0,0,0.06)';
+                    reasonBadge.textContent = r.reason || '未注明';
+                    header.appendChild(reasonBadge);
+                    card.appendChild(header);
+                    var stats = document.createElement('div');
+                    stats.className = 'cs-history-stats';
+                    if (r.usage_days != null) { var s1 = document.createElement('span'); s1.textContent = '使用: ' + r.usage_days + ' 天'; stats.appendChild(s1); }
+                    if (r.price != null) { var s2 = document.createElement('span'); s2.textContent = '价格: ¥' + Number(r.price).toFixed(2); stats.appendChild(s2); }
+                    if (r.daily_cost != null) { var s3 = document.createElement('span'); s3.textContent = '日均: ¥' + Number(r.daily_cost).toFixed(2); stats.appendChild(s3); }
+                    card.appendChild(stats);
+                    if (r.notes) { var nd = document.createElement('div'); nd.className = 'cs-history-note'; nd.textContent = r.notes; card.appendChild(nd); }
+                    listEl.appendChild(card);
+                });
+            }
+        } catch(err) {}
+        openModal('historyModal');
+    }
+
+    // ---- Printer type config modal ----
+    var ptAssetId = null;
+    function openPrinterTypeModal(printer) {
+        ptAssetId = printer.asset_id;
+        document.getElementById('ptInfo').textContent = '为「' + printer.printer_name + '」设置打印机类型：';
+        document.getElementById('printerTypeModal').style.display = '';
+    }
+    document.getElementById('btnCancelPt').addEventListener('click', function() {
+        document.getElementById('printerTypeModal').style.display = 'none';
+    });
+    document.getElementById('ptSetMono').addEventListener('click', function() { setPrinterType('mono'); });
+    document.getElementById('ptSetColor').addEventListener('click', function() { setPrinterType('color'); });
+
+    async function setPrinterType(pt) {
+        if (!ptAssetId) return;
+        try {
+            await apiFetch('/api/assets/' + ptAssetId, {method: 'PUT', body: JSON.stringify({printer_type: pt})});
+            document.getElementById('printerTypeModal').style.display = 'none';
+            location.reload();
+        } catch(err) {}
+    }
+
+    // ---- Form submissions ----
+    async function handleSubmit(e) {
+        e.preventDefault();
+        var form = document.getElementById('consumableForm');
+        var assetId = parseInt(form.dataset.assetId);
+        var printerName = form.dataset.printerName || '';
+        var colorVal = document.getElementById('cColor').value;
+
+        var payload = {
+            color: colorVal,
+            model: document.getElementById('cModel').value.trim() || null,
+            stock: parseInt(document.getElementById('cStock').value) || 0,
+            threshold: parseInt(document.getElementById('cThreshold').value) || 0,
+            current_price: document.getElementById('cPrice').value ? parseFloat(document.getElementById('cPrice').value) : null,
+            installed_at: document.getElementById('cInstalled').value || null,
+            notes: document.getElementById('cNotes').value.trim() || null,
+            asset_id: assetId,
+            type: 'toner',
+        };
+        if (editingId) {
+            payload.name = printerName + ' - ' + (COLOR_LABELS[colorVal] || colorVal);
+        }
+        try {
+            if (editingId) {
+                await apiFetch('/api/consumables/' + editingId, {method: 'PUT', body: JSON.stringify(payload)});
+            } else {
+                await apiFetch('/api/consumables', {method: 'POST', body: JSON.stringify(payload)});
+            }
+            closeModal();
+            location.reload();
+        } catch(err) {}
+    }
+
+    async function handleAdjust(e) {
+        e.preventDefault();
+        var id = document.getElementById('aId').value;
+        var delta = parseInt(document.getElementById('aDelta').value);
+        if (isNaN(delta)) { alert('请输入有效数量'); return; }
+        try {
+            await apiFetch('/api/consumables/' + id + '/adjust', {method: 'POST', body: JSON.stringify({delta: delta})});
+            closeAdjustModal();
+            refreshDrawer();
+        } catch(err) {}
+    }
+
+    async function handleReplace(e) {
+        e.preventDefault();
+        var id = document.getElementById('rId').value;
+        var payload = {
+            replaced_at: document.getElementById('rReplacedAt').value,
+            new_installed_at: document.getElementById('rNewInstalled').value || null,
+            new_price: document.getElementById('rNewPrice').value ? parseFloat(document.getElementById('rNewPrice').value) : null,
+            use_stock: document.getElementById('rUseStock').checked,
+            reason: document.getElementById('rReason').value || null,
+            notes: document.getElementById('rNotes').value.trim() || null,
+        };
+        if (!payload.replaced_at) { alert('请填写更换日期'); return; }
+        try {
+            await apiFetch('/api/consumables/' + id + '/replace', {method: 'POST', body: JSON.stringify(payload)});
+            closeReplaceModal();
+            refreshDrawer();
+        } catch(err) {}
+    }
+
+    async function refreshDrawer() {
+        try {
+            var data = await apiFetch('/api/printers/consumables');
+            printersData = data.printers || [];
+        } catch(e) {}
+        if (selectedPrinterId) {
+            var printer = printersData.find(function(p) { return p.asset_id === selectedPrinterId; });
+            if (printer) renderDrawer(printer);
+        }
+    }
+
+    // ---- History Tab ----
+    async function loadHistoryTab() {
+        var wrap = document.getElementById('historyTableWrap');
+        var countEl = document.getElementById('historyCount');
+        wrap.innerHTML = '<div class="cs-empty"><p class="cs-empty-text">加载中...</p></div>';
+        try {
+            var data = await apiFetch('/api/consumables/replacements?per_page=50');
+            var reps = data.replacements || [];
+            countEl.textContent = data.total + ' 条记录';
+
+            if (!reps.length) {
+                wrap.innerHTML = '<div class="cs-empty"><p class="cs-empty-text">暂无更换记录</p></div>';
+                return;
+            }
+
+            var table = document.createElement('table');
+            table.className = 'cs-history-table';
+            var thead = document.createElement('thead');
+            thead.innerHTML = '<tr><th>打印机</th><th>墨粉颜色</th><th>更换日期</th><th>使用天数</th><th>价格</th><th>日均成本</th><th>原因</th></tr>';
+            table.appendChild(thead);
+            var tbody = document.createElement('tbody');
+            reps.forEach(function(r) {
+                var tr = document.createElement('tr');
+                var colorLabel = COLOR_LABELS[r.toner_color] || r.toner_color || '-';
+                var tdPrinter = document.createElement('td');
+                tdPrinter.textContent = r.printer_name || '-';
+                var tdColor = document.createElement('td');
+                tdColor.textContent = colorLabel;
+                var tdDate = document.createElement('td');
+                tdDate.textContent = r.replaced_at || '-';
+                var tdDays = document.createElement('td');
+                tdDays.textContent = r.usage_days != null ? r.usage_days + ' 天' : '-';
+                var tdPrice = document.createElement('td');
+                tdPrice.textContent = r.price != null ? '¥' + Number(r.price).toFixed(2) : '-';
+                var tdDaily = document.createElement('td');
+                tdDaily.textContent = r.daily_cost != null ? '¥' + Number(r.daily_cost).toFixed(2) : '-';
+                var tdReason = document.createElement('td');
+                tdReason.textContent = r.reason || '-';
+                tr.appendChild(tdPrinter);
+                tr.appendChild(tdColor);
+                tr.appendChild(tdDate);
+                tr.appendChild(tdDays);
+                tr.appendChild(tdPrice);
+                tr.appendChild(tdDaily);
+                tr.appendChild(tdReason);
+                tbody.appendChild(tr);
+            });
+            table.appendChild(tbody);
+            wrap.innerHTML = '';
+            wrap.appendChild(table);
+        } catch(err) {
+            wrap.innerHTML = '<div class="cs-empty"><p class="cs-empty-text">加载失败</p></div>';
+        }
+    }
+
+    // ---- Cost Tab ----
+    async function loadCostTab() {
+        var wrap = document.getElementById('costContent');
+        wrap.innerHTML = '<div class="cs-empty"><p class="cs-empty-text">加载中...</p></div>';
+        try {
+            var data = await apiFetch('/api/consumables/cost-summary');
+            wrap.replaceChildren();
+
+            var cards = document.createElement('div');
+            cards.className = 'cs-cost-cards';
+            cards.appendChild(makeCostCard('¥' + Number(data.total_cost || 0).toFixed(0), '总花费'));
+            cards.appendChild(makeCostCard(data.total_replacements || 0, '更换次数'));
+            cards.appendChild(makeCostCard('¥' + Number(data.avg_daily_cost || 0).toFixed(2), '加权日均成本'));
+            wrap.appendChild(cards);
+
+            if (data.by_printer && data.by_printer.length) {
+                var panel = makeCostPanel('按打印机汇总');
+                var table = document.createElement('table');
+                table.className = 'cs-cost-by-printer';
+                var thead = document.createElement('thead');
+                var headRow = document.createElement('tr');
+                ['打印机', '更换次数', '总花费', '加权日均成本'].forEach(function(label) {
+                    var th = document.createElement('th');
+                    th.textContent = label;
+                    headRow.appendChild(th);
+                });
+                thead.appendChild(headRow);
+                table.appendChild(thead);
+                var tbody = document.createElement('tbody');
+                data.by_printer.forEach(function(p) {
+                    var tr = document.createElement('tr');
+                    [
+                        p.printer_name || '-',
+                        p.replacement_count || 0,
+                        '¥' + Number(p.total_cost || 0).toFixed(2),
+                        '¥' + Number(p.avg_daily_cost || 0).toFixed(2),
+                    ].forEach(function(value) {
+                        var td = document.createElement('td');
+                        td.textContent = value;
+                        tr.appendChild(td);
+                    });
+                    tbody.appendChild(tr);
+                });
+                table.appendChild(tbody);
+                panel.detail.appendChild(table);
+                wrap.appendChild(panel.panel);
+            }
+
+            if (data.monthly && data.monthly.length) {
+                var maxCost = Math.max.apply(null, data.monthly.map(function(m) { return m.cost || 0; })) || 1;
+                var trendPanel = makeCostPanel('月度趋势');
+                trendPanel.panel.style.marginTop = '16px';
+                var chart = document.createElement('div');
+                chart.className = 'cs-bar-chart';
+                data.monthly.forEach(function(m) {
+                    var h = Math.round((m.cost / maxCost) * 130);
+                    var col = document.createElement('div');
+                    col.className = 'cs-bar-col';
+                    var val = document.createElement('div');
+                    val.className = 'cs-bar-value';
+                    val.textContent = '¥' + Number(m.cost || 0).toFixed(0);
+                    var bar = document.createElement('div');
+                    bar.className = 'cs-bar';
+                    bar.style.height = h + 'px';
+                    var lab = document.createElement('div');
+                    lab.className = 'cs-bar-label';
+                    lab.textContent = m.month || '-';
+                    col.append(val, bar, lab);
+                    chart.appendChild(col);
+                });
+                trendPanel.detail.appendChild(chart);
+                wrap.appendChild(trendPanel.panel);
+            }
+        } catch(err) {
+            wrap.innerHTML = '<div class="cs-empty"><p class="cs-empty-text">加载失败</p></div>';
+        }
+    }
+
+    function makeCostCard(value, label) {
+        var card = document.createElement('div');
+        card.className = 'cs-cost-card';
+        var val = document.createElement('div');
+        val.className = 'cs-cost-card-value';
+        val.textContent = value;
+        var lab = document.createElement('div');
+        lab.className = 'cs-cost-card-label';
+        lab.textContent = label;
+        card.append(val, lab);
+        return card;
+    }
+
+    function makeCostPanel(title) {
+        var panel = document.createElement('div');
+        panel.className = 'cs-panel';
+        var head = document.createElement('div');
+        head.className = 'cs-panel-head';
+        var h2 = document.createElement('h2');
+        h2.className = 'cs-panel-title';
+        h2.textContent = title;
+        head.appendChild(h2);
+        var detail = document.createElement('div');
+        detail.className = 'cs-detail';
+        panel.append(head, detail);
+        return {panel: panel, detail: detail};
+    }
+
+    // ---- Init ----
+    document.getElementById('btnCancelModal').addEventListener('click', closeModal);
+    document.getElementById('btnCancelAdjust').addEventListener('click', closeAdjustModal);
+    document.getElementById('btnCancelReplace').addEventListener('click', closeReplaceModal);
+    document.getElementById('btnCloseHistory').addEventListener('click', closeHistoryModal);
+    document.getElementById('consumableForm').addEventListener('submit', handleSubmit);
+    document.getElementById('adjustForm').addEventListener('submit', handleAdjust);
+    document.getElementById('replaceForm').addEventListener('submit', handleReplace);
+
+    ['consumableModal', 'adjustModal', 'replaceModal', 'historyModal', 'printerTypeModal'].forEach(function(id) {
+        document.getElementById(id).addEventListener('click', function(e) {
+            if (e.target === this) this.style.display = 'none';
+        });
+    });
+
+    loadPrinters();
+})();
+</script>
+{% endblock %}
