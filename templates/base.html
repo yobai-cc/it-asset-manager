@@ -20,6 +20,7 @@
                 <a href="/applications" class="menu-item {% if request.path == '/applications' %}active{% endif %}" aria-label="申请审核"><span class="icon-app"></span>申请审核</a>
                 <a href="/maintenance" class="menu-item {% if request.path == '/maintenance' %}active{% endif %}" aria-label="维修总览"><span class="icon-maint"></span>维修总览</a>
                 <a href="/consumables" class="menu-item {% if request.path == '/consumables' %}active{% endif %}" aria-label="墨粉管理"><span class="icon-consumable"></span>墨粉管理</a>
+                <a href="/employees" class="menu-item {% if request.path == '/employees' %}active{% endif %}" aria-label="员工管理"><span class="icon-emp"></span>员工管理</a>
                 <a href="/users" class="menu-item {% if request.path == '/users' %}active{% endif %}" aria-label="用户管理"><span class="icon-users"></span>用户管理</a>
                 <a href="/activity" class="menu-item {% if request.path == '/activity' %}active{% endif %}" aria-label="操作记录"><span class="icon-log"></span>操作记录</a>
                 <a href="/settings" class="menu-item {% if request.path == '/settings' %}active{% endif %}" aria-label="系统设置"><span class="icon-set"></span>系统设置</a>
@@ -125,7 +126,7 @@
         const dot = makeEl('span', 'timeline-node-dot');
         const body = makeEl('div', 'timeline-node-body');
         const title = makeEl('h5', '', drawerEventNames[event.event_type] || event.event_type);
-        const metaText = [formatDrawerDate(event.created_at), event.operator_name, event.target_user_name].filter(Boolean).join(' · ');
+        const metaText = [formatDrawerDate(event.created_at), event.operator_name, event.target_employee_name || event.target_user_name].filter(Boolean).join(' · ');
         const meta = makeEl('p', 'timeline-node-meta', metaText);
         body.append(title, meta);
         if (event.notes) body.appendChild(makeEl('p', 'timeline-node-desc', event.notes));

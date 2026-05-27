@@ -199,10 +199,10 @@
             actions.appendChild(a);
         }
         if (data.status === 'in_stock') {
-            addBtn('分配', 'btn-primary', function() { loadUsers('assignUser'); openModal('assignModal'); });
+            addBtn('分配', 'btn-primary', function() { loadEmployees('assignUser'); openModal('assignModal'); });
         }
         if (data.status === 'assigned') {
-            addBtn('转移', 'btn-primary', function() { loadUsers('transferUser'); openModal('transferModal'); });
+            addBtn('转移', 'btn-primary', function() { loadEmployees('transferUser'); openModal('transferModal'); });
             addBtn('送修', 'btn-secondary', function() { openModal('maintenanceModal'); });
             addBtn('回收入库', 'btn-secondary', function() { openModal('returnModal'); });
         }
@@ -372,28 +372,30 @@
     function openModal(id) { document.getElementById(id).style.display = 'flex'; }
     function closeModal(id) { document.getElementById(id).style.display = 'none'; }
 
-    async function loadUsers(selectId) {
+    async function loadEmployees(selectId) {
         var sel = document.getElementById(selectId);
         if (sel.options.length > 1) return;
         try {
-            var res = await fetch('/api/users');
+            var res = await fetch('/api/employees');
             if (!res.ok) return;
             var data = await res.json();
             sel.innerHTML = '<option value="">请选择</option>';
-            data.users.forEach(function(u) {
+            data.employees.forEach(function(emp) {
                 var opt = document.createElement('option');
-                opt.value = u.id;
-                opt.textContent = u.name + ' (' + u.employee_id + ')';
+                opt.value = emp.id;
+                var label = emp.name;
+                if (emp.department) label += ' (' + emp.department + ')';
+                opt.textContent = label;
                 sel.appendChild(opt);
             });
         } catch(e) {}
     }
 
     async function doAssign() {
-        var uid = document.getElementById('assignUser').value;
+        var eid = document.getElementById('assignUser').value;
         var notes = document.getElementById('assignNotes').value;
         try {
-            await apiFetch('/api/assets/' + assetId + '/assign', {method:'POST', body:JSON.stringify({target_user_id:parseInt(uid), notes:notes})});
+            await apiFetch('/api/assets/' + assetId + '/assign', {method:'POST', body:JSON.stringify({target_employee_id:parseInt(eid), notes:notes})});
             closeModal('assignModal');
             loadDetail();
         } catch(e) {}
@@ -409,10 +411,10 @@
     }
 
     async function doTransfer() {
-        var uid = document.getElementById('transferUser').value;
+        var eid = document.getElementById('transferUser').value;
         var notes = document.getElementById('transferNotes').value;
         try {
-            await apiFetch('/api/assets/' + assetId + '/transfer', {method:'POST', body:JSON.stringify({target_user_id:parseInt(uid), notes:notes})});
+            await apiFetch('/api/assets/' + assetId + '/transfer', {method:'POST', body:JSON.stringify({target_employee_id:parseInt(eid), notes:notes})});
             closeModal('transferModal');
             loadDetail();
         } catch(e) {}
@@ -458,8 +460,8 @@
     }
 
     // Bind confirm buttons via addEventListener (not inline onclick)
-    document.getElementById('btnDoAssign').addEventListener('click', function() { doAssign(); loadUsers('assignUser'); });
-    document.getElementById('btnDoTransfer').addEventListener('click', function() { doTransfer(); loadUsers('transferUser'); });
+    document.getElementById('btnDoAssign').addEventListener('click', function() { doAssign(); loadEmployees('assignUser'); });
+    document.getElementById('btnDoTransfer').addEventListener('click', function() { doTransfer(); loadEmployees('transferUser'); });
     document.getElementById('btnDoMaintenance').addEventListener('click', function() { doMaintenance(); });
     document.getElementById('btnDoScrap').addEventListener('click', function() { doScrap(); });
     document.getElementById('btnDoResolve').addEventListener('click', function() { doResolve(); });

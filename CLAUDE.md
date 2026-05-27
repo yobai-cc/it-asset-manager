@@ -1,5 +1,16 @@
 # IT 资产管理系统 — 开发文档
 
+## 文档索引
+
+| 文档 | 用途 |
+|------|------|
+| [PROJECT.md](PROJECT.md) | 项目简介、业务场景、技术栈、部署 |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | 数据库设计、路由结构、认证流程、前端架构 |
+| [CONVENTIONS.md](CONVENTIONS.md) | 编码规范、数据库变更流程、安全约定 |
+| [TODO.md](TODO.md) | 待办事项、已知限制、功能规划 |
+
+需要了解背景时读 PROJECT.md；改动数据库或路由时先看 ARCHITECTURE.md；写代码前参考 CONVENTIONS.md。
+
 ## 项目概况
 
 IT 固定资产管理追踪系统，面向 IT 管理员和普通员工。
@@ -7,7 +18,7 @@ IT 固定资产管理追踪系统，面向 IT 管理员和普通员工。
 - **技术栈**：Python Flask 3.1 + SQLite（原生 SQL）+ Jinja2 + 原生 JS + CSS
 - **无前端框架**：纯 vanilla JS，无构建步骤
 - **部署**：Flask 5000 端口 → Caddy 反向代理 9090 端口（10.18.0.68:9090）
-- **规模**：server.py ~2222 行，models.py ~389 行，192 个测试
+- **规模**：server.py ~2568 行，models.py ~463 行，198 个测试
 - **标签打印**：立象 Argox 热转印打印机 + 60×40mm 亚银纸，浏览器直接打印（Logo + 资产信息 + QR）
 
 ## 快速启动
@@ -35,7 +46,7 @@ python3 server.py                   # 启动 http://0.0.0.0:5000
 
 ```
 it-asset-manager/
-├── server.py              # Flask 应用：所有路由 + API（单文件，~2134 行）
+├── server.py              # Flask 应用：所有路由 + API（单文件，~2568 行）
 ├── models.py              # 数据模型、常量、Schema SQL、工具函数
 ├── init_db.py             # 数据库初始化 + 种子数据
 ├── requirements.txt       # Flask, qrcode, Pillow, pytest
@@ -57,6 +68,7 @@ it-asset-manager/
 │   │   ├── applications.html # 申请审核
 │   │   ├── maintenance.html  # 维修总览
 │   │   ├── consumables.html  # 墨粉管理（打印机墨粉 CRUD + 库存调整）
+│   │   ├── employees.html   # 员工管理（员工名单 CRUD）
 │   │   ├── users.html        # 用户管理（创建/编辑/角色/密码重置）
 │   │   ├── settings.html  # 系统设置（Logo、标签字段、QR地址）
 │   │   └── activity.html  # 操作记录
@@ -66,17 +78,26 @@ it-asset-manager/
 │       ├── applications.html    # 我的申请
 │       └── application_form.html # 提交申请
 └── tests/
-    └── test_api.py        # 192 个自动化测试
+    └── test_api.py        # 198 个自动化测试
 ```
 
 ---
 
 ## 数据库设计
 
-### 表结构（9 张表）
+### 表结构（10 张表）
 
 ```
-user                 资产申请（asset_application）
+employee             user                 资产申请（asset_application）
+├── id PK            ├── id PK            ├── id PK
+├── name             ├── employee_id UNIQUE  ├── applicant_id → user
+├── department       ├── name             ├── asset_category
+└── created_at       ├── department       ├── reason
+                     ├── phone            ├── status [pending|approved|rejected|fulfilled]
+                     ├── email            ├── admin_id → user
+                     ├── role [admin|employee]  ├── admin_notes
+                     ├── password_hash    └── approved_at
+                     └── created_at
 ├── id PK               ├── id PK
 ├── employee_id UNIQUE  ├── applicant_id → user
 ├── name                ├── asset_category
@@ -127,7 +148,7 @@ asset
 ├── serial_number    └── created_at
 ├── status [见下方状态机]
 ├── printer_type [mono|color|NULL]（仅打印机资产）
-├── current_holder_id → user   app_config
+├── current_holder_id → employee   app_config
 ├── location         ├── key PK（如 label_fields, qr_base_url, company_logo）
 ├── purchase_date    └── value（JSON 或纯文本）
 ├── purchase_price
@@ -141,6 +162,7 @@ lifecycle_event                    maintenance_record
 ├── event_type [见状态机]           ├── reported_by → user
 ├── operator_id → user             ├── description
 ├── target_user_id → user          ├── status [pending|in_progress|resolved]
+├── target_employee_id → employee
 ├── from_location / to_location    ├── cost
 ├── notes                          ├── repair_notes
 └── created_at                     ├── resolved_at
@@ -201,7 +223,7 @@ in_stock ──assign──> assigned ──return──> in_stock
 
 ## 路由清单
 
-### 页面路由（20 条）
+### 页面路由（22 条）
 
 | 路径 | 角色 | 模板 |
 |------|------|------|
@@ -216,6 +238,7 @@ in_stock ──assign──> assigned ──return──> in_stock
 | `/applications` | admin | admin/applications.html |
 | `/maintenance` | admin | admin/maintenance.html |
 | `/consumables` | admin | admin/consumables.html |
+| `/employees` | admin | admin/employees.html |
 | `/users` | admin | admin/users.html |
 | `/settings` | admin | admin/settings.html |
 | `/activity` | admin | admin/activity.html |
@@ -226,7 +249,7 @@ in_stock ──assign──> assigned ──return──> in_stock
 | `/my/applications` | employee | employee/applications.html |
 | `/my/applications/new` | employee | employee/application_form.html |
 
-### API 路由（55 条）
+### API 路由（62 条）
 
 **认证**：`POST /api/login`、`POST /api/logout`、`GET /api/me`
 
@@ -245,6 +268,8 @@ in_stock ──assign──> assigned ──return──> in_stock
 **统计**：`GET /api/stats`（含 warranty_expiring/expired）
 
 **用户**：`GET /api/users`、`POST /api/users`、`GET /api/users/<id>`、`PUT /api/users/<id>`、`DELETE /api/users/<id>`、`POST /api/users/<id>/reset-password`
+
+**员工**：`GET /api/employees`、`POST /api/employees`、`PUT /api/employees/<id>`、`DELETE /api/employees/<id>`
 
 **耗材**：`GET /api/consumables`、`POST /api/consumables`、`GET/PUT/DELETE /api/consumables/<id>`、`POST /api/consumables/<id>/adjust`、`POST /api/consumables/<id>/replace`、`GET /api/consumables/<id>/replacements`、`GET /api/printers/consumables`
 

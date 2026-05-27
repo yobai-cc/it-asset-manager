@@ -144,6 +144,57 @@ class Database:
             ]:
                 if col_name not in consumable_cols:
                     conn.execute(f"ALTER TABLE printer_consumable ADD COLUMN {col_name} {col_def}")
+
+            # ---- employee 迁移 ----
+            emp_cols = [r[1] for r in conn.execute("PRAGMA table_info(employee)").fetchall()]
+            if "employee_id" not in emp_cols:
+                conn.execute("ALTER TABLE employee ADD COLUMN employee_id TEXT")
+
+            le_cols = [r[1] for r in conn.execute("PRAGMA table_info(lifecycle_event)").fetchall()]
+            if "target_employee_id" not in le_cols:
+                conn.execute("ALTER TABLE lifecycle_event ADD COLUMN target_employee_id INTEGER REFERENCES employee(id)")
+
+            emp_count = conn.execute("SELECT COUNT(*) FROM employee").fetchone()[0]
+            user_count = conn.execute('SELECT COUNT(*) FROM "user"').fetchone()[0]
+            if emp_count == 0 and user_count > 0:
+                conn.execute(
+                    'INSERT INTO employee (employee_id, name, department) '
+                    'SELECT employee_id, name, department FROM "user"'
+                )
+                conn.execute(
+                    'UPDATE asset SET current_holder_id = ('
+                    '  SELECT e.id FROM employee e '
+                    '  JOIN "user" u ON u.employee_id = e.employee_id '
+                    '  WHERE u.id = asset.current_holder_id'
+                    ') WHERE current_holder_id IS NOT NULL'
+                )
+                conn.execute(
+                    'UPDATE lifecycle_event SET target_employee_id = ('
+                    '  SELECT e.id FROM employee e '
+                    '  JOIN "user" u ON u.employee_id = e.employee_id '
+                    '  WHERE u.id = lifecycle_event.target_user_id'
+                    ') WHERE target_user_id IS NOT NULL AND target_employee_id IS NULL'
+                )
+            elif user_count > 0:
+                conn.execute(
+                    'UPDATE employee SET employee_id = ('
+                    '  SELECT u.employee_id FROM "user" u WHERE u.id = employee.id'
+                    ') WHERE employee_id IS NULL AND EXISTS (SELECT 1 FROM "user" u WHERE u.id = employee.id)'
+                )
+                conn.execute(
+                    'UPDATE employee SET employee_id = ('
+                    '  SELECT u.employee_id FROM "user" u '
+                    '  WHERE u.name = employee.name '
+                    '    AND COALESCE(u.department, "") = COALESCE(employee.department, "") '
+                    '  ORDER BY u.id LIMIT 1'
+                    ') WHERE employee_id IS NULL'
+                )
+
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_employee_employee_id "
+                "ON employee(employee_id) WHERE employee_id IS NOT NULL"
+            )
+
             # 迁移明文密码
             self._upgrade_passwords(conn)
 
@@ -257,6 +308,14 @@ CREATE TABLE IF NOT EXISTS consumable_replacement (
     created_at              DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS employee (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    employee_id     TEXT UNIQUE,
+    name            TEXT NOT NULL,
+    department      TEXT,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS "user" (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     employee_id     TEXT UNIQUE NOT NULL,
@@ -278,7 +337,7 @@ CREATE TABLE IF NOT EXISTS asset (
     model               TEXT,
     serial_number       TEXT UNIQUE,
     status              TEXT NOT NULL DEFAULT 'in_stock',
-    current_holder_id   INTEGER REFERENCES user(id),
+    current_holder_id   INTEGER REFERENCES employee(id),
     location            TEXT,
     purchase_date       DATE,
     purchase_price      REAL,
@@ -295,6 +354,7 @@ CREATE TABLE IF NOT EXISTS lifecycle_event (
     event_type      TEXT NOT NULL,
     operator_id     INTEGER NOT NULL REFERENCES user(id),
     target_user_id  INTEGER REFERENCES user(id),
+    target_employee_id INTEGER REFERENCES employee(id),
     from_location   TEXT,
     to_location     TEXT,
     notes           TEXT,
@@ -345,6 +405,14 @@ LEGACY_MIGRATION_SCHEMA = """
 -- Legacy MVP databases predated activity logging and app-level settings.
 -- Fresh installs get these tables from SCHEMA above; this block is only
 -- for idempotently filling gaps in existing SQLite files.
+CREATE TABLE IF NOT EXISTS employee (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    employee_id     TEXT UNIQUE,
+    name            TEXT NOT NULL,
+    department      TEXT,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS printer_consumable (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     name            TEXT NOT NULL,

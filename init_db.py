@@ -11,9 +11,22 @@ def seed(db):
     """插入演示数据"""
     with db.get_conn() as conn:
         # 清空旧数据
-        for table in ["consumable_replacement", "printer_consumable", "activity_log", "app_config", "asset_application", "maintenance_record", "lifecycle_event", "asset", "user"]:
+        for table in ["consumable_replacement", "printer_consumable", "activity_log", "app_config", "asset_application", "maintenance_record", "lifecycle_event", "asset", "user", "employee"]:
             conn.execute(f"DELETE FROM {table}")
         conn.executescript("DELETE FROM sqlite_sequence")
+
+        # 员工名单
+        employees = [
+            ("admin", "管理员", "IT部"),
+            ("emp001", "张三", "研发部"),
+            ("emp002", "李四", "市场部"),
+            ("emp003", "王五", "财务部"),
+        ]
+        for emp in employees:
+            conn.execute(
+                "INSERT INTO employee (employee_id, name, department) VALUES (?, ?, ?)",
+                emp,
+            )
 
         # 用户
         users = [
@@ -53,24 +66,24 @@ def seed(db):
 
         # 生命周期事件
         events = [
-            (1, "stock_in", 1, None, None, "仓库", "入库"),
-            (1, "assign", 1, 2, None, "工位A-101", "分配给张三"),
-            (2, "stock_in", 1, None, None, "仓库", "入库"),
-            (2, "assign", 1, 3, None, "工位B-205", "分配给王五→改为李四"),
-            (3, "stock_in", 1, None, None, "仓库", "入库"),
-            (3, "assign", 1, 2, None, "工位A-101", "分配给张三"),
-            (8, "stock_in", 1, None, None, "仓库", "入库"),
-            (8, "assign", 1, 1, None, "IT部", "分配给管理员"),
-            (8, "maintenance_start", 1, None, None, "维修", "键盘故障"),
-            (10, "stock_in", 1, None, None, "仓库", "入库"),
-            (10, "assign", 1, 2, None, "工位", "分配给张三"),
-            (10, "scrap", 1, None, None, "报废", "屏幕碎裂"),
+            (1, "stock_in", 1, None, None, None, "仓库", "入库"),
+            (1, "assign", 1, 2, 2, None, "工位A-101", "分配给张三"),
+            (2, "stock_in", 1, None, None, None, "仓库", "入库"),
+            (2, "assign", 1, 3, 3, None, "工位B-205", "分配给李四"),
+            (3, "stock_in", 1, None, None, None, "仓库", "入库"),
+            (3, "assign", 1, 2, 2, None, "工位A-101", "分配给张三"),
+            (8, "stock_in", 1, None, None, None, "仓库", "入库"),
+            (8, "assign", 1, 1, 1, None, "IT部", "分配给管理员"),
+            (8, "maintenance_start", 1, None, None, None, "维修", "键盘故障"),
+            (10, "stock_in", 1, None, None, None, "仓库", "入库"),
+            (10, "assign", 1, 2, 2, None, "工位", "分配给张三"),
+            (10, "scrap", 1, None, None, None, "报废", "屏幕碎裂"),
         ]
         for e in events:
             conn.execute(
-                """INSERT INTO lifecycle_event (asset_id, event_type, operator_id, target_user_id,
+                """INSERT INTO lifecycle_event (asset_id, event_type, operator_id, target_user_id, target_employee_id,
                    from_location, to_location, notes)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 e,
             )
 

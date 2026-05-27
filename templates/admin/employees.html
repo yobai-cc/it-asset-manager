@@ -1,0 +1,271 @@
+{% extends "base.html" %}
+{% block title %}员工管理 — IT 资产管理{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title" data-page-title="employees">员工管理</h1>
+        <p class="page-subtitle">管理企业员工名单</p>
+    </div>
+    <div class="page-actions">
+        <button type="button" class="btn btn-secondary" id="btnImport">批量导入</button>
+        <button type="button" class="btn btn-primary" id="btnAddEmployee">新增员工</button>
+    </div>
+</div>
+
+<div class="table-shell">
+    <table class="asset-data-table">
+        <thead>
+            <tr>
+                <th>工号</th>
+                <th>姓名</th>
+                <th>部门</th>
+                <th>持有资产</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody id="employeesTableBody"></tbody>
+    </table>
+    <div id="emptyState" class="empty-state" style="display:none;">
+        <p class="empty-state-text">暂无员工</p>
+        <p class="empty-state-hint">点击「新增员工」添加第一位员工</p>
+    </div>
+</div>
+
+<!-- 新增/编辑员工弹窗 -->
+<div id="employeeModal" class="modal" style="display:none;">
+    <div class="modal-content" data-modal="employee-form">
+        <h3 id="modalTitle">新增员工</h3>
+        <form id="employeeForm" autocomplete="off">
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="eEmployeeId">工号</label>
+                    <input type="text" id="eEmployeeId" name="employee_id">
+                </div>
+                <div class="form-group">
+                    <label for="eName">姓名 *</label>
+                    <input type="text" id="eName" name="name" required>
+                </div>
+                <div class="form-group">
+                    <label for="eDepartment">部门</label>
+                    <input type="text" id="eDepartment" name="department">
+                </div>
+            </div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
+                <button type="button" class="btn btn-secondary" id="btnCancelModal">取消</button>
+                <button type="submit" class="btn btn-primary" id="btnSubmitForm">保存</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- 批量导入弹窗 -->
+<div id="importModal" class="modal" style="display:none;">
+    <div class="modal-content" data-modal="import-form">
+        <h3>批量导入员工</h3>
+        <div style="margin-bottom:12px;color:var(--color-text-muted);font-size:14px;line-height:1.6;">
+            <p>CSV 格式（UTF-8 编码），必填列：<strong>name</strong>（姓名），可选列：<strong>employee_id</strong>（工号）、<strong>department</strong>（部门）。</p>
+            <p>建议先新增一名员工，再导出 CSV 作为模板参考。</p>
+        </div>
+        <form id="importForm" enctype="multipart/form-data">
+            <div class="form-group">
+                <input type="file" id="importFile" name="file" accept=".csv" required>
+            </div>
+            <div id="importResult" style="display:none;margin-top:12px;"></div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
+                <button type="button" class="btn btn-secondary" id="btnCancelImport">关闭</button>
+                <button type="submit" class="btn btn-primary" id="btnDoImport">导入</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+    let editingId = null;
+
+    async function loadEmployees() {
+        const data = await apiFetch('/api/employees');
+        const tbody = document.getElementById('employeesTableBody');
+        const empty = document.getElementById('emptyState');
+        tbody.replaceChildren();
+
+        if (!data.employees || data.employees.length === 0) {
+            empty.style.display = '';
+            return;
+        }
+        empty.style.display = 'none';
+
+        data.employees.forEach(function(emp) {
+            const tr = document.createElement('tr');
+
+            const tdEmployeeId = document.createElement('td');
+            tdEmployeeId.textContent = emp.employee_id || '-';
+            tr.appendChild(tdEmployeeId);
+
+            const tdName = document.createElement('td');
+            const nameStrong = document.createElement('strong');
+            nameStrong.textContent = emp.name || '-';
+            tdName.appendChild(nameStrong);
+            tr.appendChild(tdName);
+
+            const tdDept = document.createElement('td');
+            tdDept.textContent = emp.department || '-';
+            tr.appendChild(tdDept);
+
+            const tdCount = document.createElement('td');
+            if (emp.asset_count > 0) {
+                const badge = document.createElement('span');
+                badge.className = 'badge badge-assigned';
+                badge.textContent = emp.asset_count + ' 件';
+                tdCount.appendChild(badge);
+            } else {
+                tdCount.textContent = '-';
+            }
+            tr.appendChild(tdCount);
+
+            const tdActions = document.createElement('td');
+            tdActions.style.whiteSpace = 'nowrap';
+
+            const btnEdit = document.createElement('button');
+            btnEdit.type = 'button';
+            btnEdit.className = 'btn btn-sm btn-secondary';
+            btnEdit.textContent = '编辑';
+            btnEdit.addEventListener('click', function() { openEdit(emp); });
+            tdActions.appendChild(btnEdit);
+
+            tdActions.appendChild(document.createTextNode(' '));
+
+            const btnDel = document.createElement('button');
+            btnDel.type = 'button';
+            btnDel.className = 'btn btn-sm btn-danger';
+            btnDel.textContent = '删除';
+            btnDel.addEventListener('click', function() { deleteEmployee(emp); });
+            tdActions.appendChild(btnDel);
+
+            tr.appendChild(tdActions);
+            tbody.appendChild(tr);
+        });
+    }
+
+    function openModal() {
+        document.getElementById('employeeModal').style.display = '';
+    }
+    function closeModal() {
+        document.getElementById('employeeModal').style.display = 'none';
+        document.getElementById('employeeForm').reset();
+        editingId = null;
+    }
+    function closeImportModal() {
+        document.getElementById('importModal').style.display = 'none';
+        document.getElementById('importForm').reset();
+        document.getElementById('importResult').style.display = 'none';
+    }
+
+    function openCreate() {
+        editingId = null;
+        document.getElementById('modalTitle').textContent = '新增员工';
+        document.getElementById('btnSubmitForm').textContent = '保存';
+        document.getElementById('employeeForm').reset();
+        openModal();
+    }
+
+    function openEdit(emp) {
+        editingId = emp.id;
+        document.getElementById('modalTitle').textContent = '编辑员工';
+        document.getElementById('btnSubmitForm').textContent = '更新';
+        document.getElementById('eEmployeeId').value = emp.employee_id || '';
+        document.getElementById('eName').value = emp.name || '';
+        document.getElementById('eDepartment').value = emp.department || '';
+        openModal();
+    }
+
+    async function handleSubmit(e) {
+        e.preventDefault();
+        const payload = {
+            employee_id: document.getElementById('eEmployeeId').value.trim() || null,
+            name: document.getElementById('eName').value.trim(),
+            department: document.getElementById('eDepartment').value.trim() || null,
+        };
+        if (!payload.name) { alert('请填写姓名'); return; }
+
+        try {
+            if (editingId) {
+                await apiFetch('/api/employees/' + editingId, {method: 'PUT', body: JSON.stringify(payload)});
+            } else {
+                await apiFetch('/api/employees', {method: 'POST', body: JSON.stringify(payload)});
+            }
+            closeModal();
+            loadEmployees();
+        } catch(err) {}
+    }
+
+    async function deleteEmployee(emp) {
+        if (!confirm('确定删除员工「' + emp.name + '」吗？\n如果该员工持有资产，需先归还资产才能删除。')) return;
+        try {
+            await apiFetch('/api/employees/' + emp.id, {method: 'DELETE'});
+            loadEmployees();
+        } catch(err) {}
+    }
+
+    async function handleImport(e) {
+        e.preventDefault();
+        const fileInput = document.getElementById('importFile');
+        if (!fileInput.files.length) { alert('请选择 CSV 文件'); return; }
+        const formData = new FormData();
+        formData.append('file', fileInput.files[0]);
+
+        try {
+            const result = await apiFetch('/api/employees/import', {method: 'POST', body: formData});
+            const resultDiv = document.getElementById('importResult');
+            resultDiv.style.display = '';
+            resultDiv.replaceChildren();
+            resultDiv.appendChild(document.createTextNode('成功导入 '));
+            const success = document.createElement('strong');
+            success.textContent = result.success;
+            resultDiv.appendChild(success);
+            resultDiv.appendChild(document.createTextNode(' 名员工'));
+            if (result.errors && result.errors.length > 0) {
+                resultDiv.appendChild(document.createTextNode('，'));
+                const fail = document.createElement('span');
+                fail.style.color = 'var(--color-danger)';
+                fail.textContent = '失败 ' + result.errors.length + ' 条';
+                resultDiv.appendChild(fail);
+                resultDiv.appendChild(document.createTextNode('：'));
+                const list = document.createElement('ul');
+                list.style.margin = '4px 0 0 16px';
+                list.style.fontSize = '13px';
+                result.errors.forEach(function(err) {
+                    const li = document.createElement('li');
+                    li.textContent = '第 ' + err.row + ' 行：' + err.error;
+                    list.appendChild(li);
+                });
+                resultDiv.appendChild(list);
+            }
+            loadEmployees();
+        } catch(err) {}
+    }
+
+    // Init
+    document.getElementById('btnAddEmployee').addEventListener('click', openCreate);
+    document.getElementById('btnCancelModal').addEventListener('click', closeModal);
+    document.getElementById('employeeForm').addEventListener('submit', handleSubmit);
+    document.getElementById('btnImport').addEventListener('click', function() {
+        document.getElementById('importModal').style.display = '';
+    });
+    document.getElementById('btnCancelImport').addEventListener('click', closeImportModal);
+    document.getElementById('importForm').addEventListener('submit', handleImport);
+
+    document.getElementById('employeeModal').addEventListener('click', function(e) {
+        if (e.target === this) closeModal();
+    });
+    document.getElementById('importModal').addEventListener('click', function(e) {
+        if (e.target === this) closeImportModal();
+    });
+
+    loadEmployees();
+})();
+</script>
+{% endblock %}

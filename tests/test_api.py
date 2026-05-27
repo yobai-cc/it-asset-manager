@@ -154,6 +154,12 @@ def app_client(db, monkeypatch):
 def seed_test_data(db):
     """插入测试基础数据"""
     with db.get_conn() as conn:
+        # 员工
+        conn.execute("INSERT INTO employee (employee_id, name, department) VALUES ('admin', '管理员', 'IT部')")
+        conn.execute("INSERT INTO employee (employee_id, name, department) VALUES ('emp001', '张三', '研发部')")
+        conn.execute("INSERT INTO employee (employee_id, name, department) VALUES ('emp002', '李四', '市场部')")
+
+        # 用户
         conn.execute(
             """INSERT INTO "user" (employee_id, name, department, role, password_hash)
                VALUES ('admin', '管理员', 'IT部', 'admin', 'admin123')"""
@@ -373,7 +379,7 @@ class TestAssetCRUD:
         login_admin(app_client)
         create_res = app_client.post("/api/assets", json={"name": "Test PC", "category": "computer"})
         aid = create_res.get_json()["id"]
-        app_client.post(f"/api/assets/{aid}/assign", json={"target_user_id": 2})
+        app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
         res = app_client.delete(f"/api/assets/{aid}")
         assert res.status_code == 400
 
@@ -402,7 +408,7 @@ class TestLifecycle:
     def test_assign_asset(self, app_client, db):
         """AC5: 领用操作 → 状态变 assigned → 持有人更新"""
         aid = self._create_and_login(app_client, db)
-        res = app_client.post(f"/api/assets/{aid}/assign", json={"target_user_id": 2})
+        res = app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
         assert res.status_code == 200
         data = res.get_json()
         assert data["status"] == "assigned"
@@ -411,7 +417,7 @@ class TestLifecycle:
     def test_return_asset(self, app_client, db):
         """AC6: 归还操作 → 状态变 in_stock → 持有人清空"""
         aid = self._create_and_login(app_client, db)
-        app_client.post(f"/api/assets/{aid}/assign", json={"target_user_id": 2})
+        app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
         res = app_client.post(f"/api/assets/{aid}/return", json={"notes": "归还"})
         assert res.status_code == 200
         data = res.get_json()
@@ -421,8 +427,8 @@ class TestLifecycle:
     def test_transfer_asset(self, app_client, db):
         """AC7: 转移操作 → 持有人变更 (状态仍 assigned)"""
         aid = self._create_and_login(app_client, db)
-        app_client.post(f"/api/assets/{aid}/assign", json={"target_user_id": 2})
-        res = app_client.post(f"/api/assets/{aid}/transfer", json={"target_user_id": 3})
+        app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
+        res = app_client.post(f"/api/assets/{aid}/transfer", json={"target_employee_id": 3})
         assert res.status_code == 200
         data = res.get_json()
         assert data["status"] == "assigned"
@@ -431,7 +437,7 @@ class TestLifecycle:
     def test_maintenance_start(self, app_client, db):
         """AC8: 维修操作 → 状态变 maintenance → 维修记录生成"""
         aid = self._create_and_login(app_client, db)
-        app_client.post(f"/api/assets/{aid}/assign", json={"target_user_id": 2})
+        app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
         res = app_client.post(f"/api/assets/{aid}/maintenance", json={"description": "键盘故障"})
         assert res.status_code == 200
         data = res.get_json()
@@ -441,7 +447,7 @@ class TestLifecycle:
     def test_maintenance_resolve_return_to_user(self, app_client, db):
         """AC9: 维修完成 → 回到原持有人"""
         aid = self._create_and_login(app_client, db)
-        app_client.post(f"/api/assets/{aid}/assign", json={"target_user_id": 2})
+        app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
         res = app_client.post(f"/api/assets/{aid}/maintenance", json={"description": "键盘故障"})
         record_id = res.get_json()["maintenance_record_id"]
         res = app_client.post(
@@ -456,7 +462,7 @@ class TestLifecycle:
     def test_maintenance_resolve_return_to_stock(self, app_client, db):
         """AC9: 维修完成 → 归还库存"""
         aid = self._create_and_login(app_client, db)
-        app_client.post(f"/api/assets/{aid}/assign", json={"target_user_id": 2})
+        app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
         res = app_client.post(f"/api/assets/{aid}/maintenance", json={"description": "故障"})
         record_id = res.get_json()["maintenance_record_id"]
         res = app_client.post(
@@ -480,7 +486,7 @@ class TestLifecycle:
         """报废是终态，不可再操作"""
         aid = self._create_and_login(app_client, db)
         app_client.post(f"/api/assets/{aid}/scrap", json={"notes": "报废"})
-        res = app_client.post(f"/api/assets/{aid}/assign", json={"target_user_id": 2})
+        res = app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
         assert res.status_code == 400
 
     def test_invalid_transition(self, app_client, db):
@@ -492,7 +498,7 @@ class TestLifecycle:
     def test_lifecycle_events_recorded(self, app_client, db):
         """每次操作都应记录生命周期事件"""
         aid = self._create_and_login(app_client, db)
-        app_client.post(f"/api/assets/{aid}/assign", json={"target_user_id": 2})
+        app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
         app_client.post(f"/api/assets/{aid}/return", json={"notes": "归还"})
         res = app_client.get(f"/api/assets/{aid}/events")
         events = res.get_json()["events"]
@@ -510,7 +516,7 @@ class TestMaintenance:
         login_admin(app_client)
         res = app_client.post("/api/assets", json={"name": "PC", "category": "computer"})
         aid = res.get_json()["id"]
-        app_client.post(f"/api/assets/{aid}/assign", json={"target_user_id": 2})
+        app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
         app_client.post(f"/api/assets/{aid}/maintenance", json={"description": "故障"})
         res = app_client.get("/api/maintenance")
         data = res.get_json()
@@ -606,7 +612,7 @@ class TestEmployeeSelfService:
         login_admin(app_client)
         res = app_client.post("/api/assets", json={"name": "PC", "category": "computer"})
         aid = res.get_json()["id"]
-        app_client.post(f"/api/assets/{aid}/assign", json={"target_user_id": 2})
+        app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
         login_employee(app_client)
         res = app_client.get("/api/my/assets")
         assert res.status_code == 200
@@ -619,11 +625,38 @@ class TestEmployeeSelfService:
         app_client.post("/api/assets", json={"name": "ThinkPad", "category": "computer"})
         res = app_client.post("/api/assets", json={"name": "ThinkPad", "category": "computer"})
         aid = res.get_json()["id"]
-        app_client.post(f"/api/assets/{aid}/assign", json={"target_user_id": 2})
+        app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
 
         login_employee(app_client)
         res = app_client.get("/api/my/assets?search=ThinkPad")
         assert len(res.get_json()["assets"]) >= 1
+
+    def test_my_assets_match_employee_by_employee_id_not_name(self, app_client, db):
+        """员工自助资产必须按工号关联，避免重名员工串号。"""
+        seed_test_data(db)
+        login_admin(app_client)
+        create_user = app_client.post("/api/users", json={
+            "employee_id": "emp_dup",
+            "name": "张三",
+            "department": "销售部",
+            "role": "employee",
+            "password": "emp_dup",
+        })
+        assert create_user.status_code == 201
+        employees = app_client.get("/api/employees").get_json()["employees"]
+        dup_employee = next(e for e in employees if e["employee_id"] == "emp_dup")
+
+        res = app_client.post("/api/assets", json={"name": "Duplicate Name PC", "category": "computer"})
+        aid = res.get_json()["id"]
+        app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": dup_employee["id"]})
+
+        login_employee(app_client)
+        emp001_assets = app_client.get("/api/my/assets").get_json()["assets"]
+        assert all(a["id"] != aid for a in emp001_assets)
+
+        login_employee(app_client, "emp_dup")
+        dup_assets = app_client.get("/api/my/assets").get_json()["assets"]
+        assert any(a["id"] == aid for a in dup_assets)
 
 
 # ---- 标签/二维码测试 ----
@@ -785,6 +818,7 @@ class TestEnhancementRegressions:
         legacy_mvp_db.upgrade_db()
         with legacy_mvp_db.get_conn() as conn:
             asset_cols = [r[1] for r in conn.execute("PRAGMA table_info(asset)").fetchall()]
+            employee_cols = [r[1] for r in conn.execute("PRAGMA table_info(employee)").fetchall()]
             tables = [r[0] for r in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()]
@@ -794,13 +828,24 @@ class TestEnhancementRegressions:
             asset = conn.execute(
                 "SELECT * FROM asset WHERE asset_tag = ?", ("PC-2026-0001",)
             ).fetchone()
+            employee = conn.execute(
+                "SELECT * FROM employee WHERE employee_id = ?", ("emp001",)
+            ).fetchone()
+            event = conn.execute(
+                "SELECT * FROM lifecycle_event WHERE asset_id = ?", (asset["id"],)
+            ).fetchone()
+            employee_indexes = [r[1] for r in conn.execute("PRAGMA index_list(employee)").fetchall()]
             assert "warranty_date" in asset_cols
+            assert "employee_id" in employee_cols
             assert "activity_log" in tables
             assert "app_config" in tables
+            assert "idx_employee_employee_id" in employee_indexes
             assert conn.execute("SELECT COUNT(*) FROM lifecycle_event").fetchone()[0] == 1
             assert user["password_hash"] != "admin123"
             assert "$" in user["password_hash"]
             assert asset["name"] == "Legacy PC"
+            assert asset["current_holder_id"] == employee["id"]
+            assert event["target_employee_id"] == employee["id"]
             assert asset["warranty_date"] is None
 
         legacy_mvp_db.upgrade_db()
@@ -985,7 +1030,7 @@ class TestFullLifecycle:
         assert r.get_json()["status"] == "in_stock"
 
         # 分配
-        r = app_client.post(f"/api/assets/{aid}/assign", json={"target_user_id": 2})
+        r = app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
         assert r.get_json()["status"] == "assigned"
 
         # 归还
@@ -993,12 +1038,12 @@ class TestFullLifecycle:
         assert r.get_json()["status"] == "in_stock"
 
         # 再分配
-        r = app_client.post(f"/api/assets/{aid}/assign", json={"target_user_id": 3})
+        r = app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 3})
         assert r.get_json()["status"] == "assigned"
         assert r.get_json()["current_holder_id"] == 3
 
         # 转移
-        r = app_client.post(f"/api/assets/{aid}/transfer", json={"target_user_id": 2})
+        r = app_client.post(f"/api/assets/{aid}/transfer", json={"target_employee_id": 2})
         assert r.get_json()["current_holder_id"] == 2
 
         # 送修
@@ -1790,6 +1835,23 @@ class TestUserManagementAPI:
         assert row["password_hash"] != "pass123"
         assert "$" in row["password_hash"]
 
+    def test_create_user_syncs_employee_record(self, app_client, db):
+        """创建登录用户时同步员工名单，供资产分配和自助资产查询使用。"""
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/users", json={
+            "employee_id": "emp_sync",
+            "name": "同步员工",
+            "department": "运维部",
+            "role": "employee",
+            "password": "emp_sync",
+        })
+        assert res.status_code == 201
+        employees = app_client.get("/api/employees").get_json()["employees"]
+        created = next(e for e in employees if e["employee_id"] == "emp_sync")
+        assert created["name"] == "同步员工"
+        assert created["department"] == "运维部"
+
     def test_create_user_duplicate_employee_id_fails(self, app_client, db):
         """重复工号应返回 400"""
         seed_test_data(db)
@@ -1896,7 +1958,7 @@ class TestUserManagementAPI:
         # 分配资产给 emp001 (id=2)
         create_res = app_client.post("/api/assets", json={"name": "PC", "category": "computer"})
         aid = create_res.get_json()["id"]
-        app_client.post(f"/api/assets/{aid}/assign", json={"target_user_id": 2})
+        app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
         res = app_client.delete("/api/users/2")
         assert res.status_code == 400
 
