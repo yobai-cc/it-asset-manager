@@ -17,14 +17,14 @@ def seed(db):
 
         # 员工名单
         employees = [
-            ("admin", "管理员", "IT部"),
-            ("emp001", "张三", "研发部"),
-            ("emp002", "李四", "市场部"),
-            ("emp003", "王五", "财务部"),
+            ("管理员", "IT部"),
+            ("张三", "研发部"),
+            ("李四", "市场部"),
+            ("王五", "财务部"),
         ]
         for emp in employees:
             conn.execute(
-                "INSERT INTO employee (employee_id, name, department) VALUES (?, ?, ?)",
+                "INSERT INTO employee (name, department) VALUES (?, ?)",
                 emp,
             )
 

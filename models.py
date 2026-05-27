@@ -149,6 +149,13 @@ class Database:
             emp_cols = [r[1] for r in conn.execute("PRAGMA table_info(employee)").fetchall()]
             if "employee_id" not in emp_cols:
                 conn.execute("ALTER TABLE employee ADD COLUMN employee_id TEXT")
+            if "status" not in emp_cols:
+                conn.execute("ALTER TABLE employee ADD COLUMN status TEXT NOT NULL DEFAULT 'active'")
+            if "notes" not in emp_cols:
+                conn.execute("ALTER TABLE employee ADD COLUMN notes TEXT")
+            if "updated_at" not in emp_cols:
+                conn.execute("ALTER TABLE employee ADD COLUMN updated_at DATETIME")
+                conn.execute("UPDATE employee SET updated_at = COALESCE(created_at, CURRENT_TIMESTAMP)")
 
             le_cols = [r[1] for r in conn.execute("PRAGMA table_info(lifecycle_event)").fetchall()]
             if "target_employee_id" not in le_cols:
@@ -313,7 +320,10 @@ CREATE TABLE IF NOT EXISTS employee (
     employee_id     TEXT UNIQUE,
     name            TEXT NOT NULL,
     department      TEXT,
-    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+    status          TEXT NOT NULL DEFAULT 'active',
+    notes           TEXT,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS "user" (
@@ -410,7 +420,10 @@ CREATE TABLE IF NOT EXISTS employee (
     employee_id     TEXT UNIQUE,
     name            TEXT NOT NULL,
     department      TEXT,
-    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+    status          TEXT NOT NULL DEFAULT 'active',
+    notes           TEXT,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS printer_consumable (

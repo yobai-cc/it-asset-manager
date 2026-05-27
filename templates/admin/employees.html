@@ -17,10 +17,10 @@
     <table class="asset-data-table">
         <thead>
             <tr>
-                <th>工号</th>
                 <th>姓名</th>
                 <th>部门</th>
                 <th>持有资产</th>
+                <th>状态</th>
                 <th>操作</th>
             </tr>
         </thead>
@@ -39,10 +39,6 @@
         <form id="employeeForm" autocomplete="off">
             <div class="form-row">
                 <div class="form-group">
-                    <label for="eEmployeeId">工号</label>
-                    <input type="text" id="eEmployeeId" name="employee_id">
-                </div>
-                <div class="form-group">
                     <label for="eName">姓名 *</label>
                     <input type="text" id="eName" name="name" required>
                 </div>
@@ -50,6 +46,10 @@
                     <label for="eDepartment">部门</label>
                     <input type="text" id="eDepartment" name="department">
                 </div>
+            </div>
+            <div class="form-group">
+                <label for="eNotes">备注</label>
+                <textarea id="eNotes" name="notes" rows="3"></textarea>
             </div>
             <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
                 <button type="button" class="btn btn-secondary" id="btnCancelModal">取消</button>
@@ -64,8 +64,8 @@
     <div class="modal-content" data-modal="import-form">
         <h3>批量导入员工</h3>
         <div style="margin-bottom:12px;color:var(--color-text-muted);font-size:14px;line-height:1.6;">
-            <p>CSV 格式（UTF-8 编码），必填列：<strong>name</strong>（姓名），可选列：<strong>employee_id</strong>（工号）、<strong>department</strong>（部门）。</p>
-            <p>建议先新增一名员工，再导出 CSV 作为模板参考。</p>
+            <p>CSV 格式（UTF-8 编码），必填列：<strong>name</strong>（姓名），可选列：<strong>department</strong>（部门）、<strong>notes</strong>（备注）。</p>
+            <p>如从系统导出后再导入，可保留 <strong>system_id</strong> 列用于精准更新；没有 system_id 时按姓名+部门唯一匹配，重名冲突会进入错误列表。</p>
         </div>
         <form id="importForm" enctype="multipart/form-data">
             <div class="form-group">
@@ -101,10 +101,6 @@
         data.employees.forEach(function(emp) {
             const tr = document.createElement('tr');
 
-            const tdEmployeeId = document.createElement('td');
-            tdEmployeeId.textContent = emp.employee_id || '-';
-            tr.appendChild(tdEmployeeId);
-
             const tdName = document.createElement('td');
             const nameStrong = document.createElement('strong');
             nameStrong.textContent = emp.name || '-';
@@ -126,6 +122,13 @@
             }
             tr.appendChild(tdCount);
 
+            const tdStatus = document.createElement('td');
+            const statusBadge = document.createElement('span');
+            statusBadge.className = 'badge ' + (emp.status === 'inactive' ? 'badge-scrapped' : 'badge-assigned');
+            statusBadge.textContent = emp.status === 'inactive' ? '停用' : '在职';
+            tdStatus.appendChild(statusBadge);
+            tr.appendChild(tdStatus);
+
             const tdActions = document.createElement('td');
             tdActions.style.whiteSpace = 'nowrap';
 
@@ -141,8 +144,9 @@
             const btnDel = document.createElement('button');
             btnDel.type = 'button';
             btnDel.className = 'btn btn-sm btn-danger';
-            btnDel.textContent = '删除';
-            btnDel.addEventListener('click', function() { deleteEmployee(emp); });
+            btnDel.textContent = emp.status === 'inactive' ? '已停用' : '停用';
+            btnDel.disabled = emp.status === 'inactive';
+            btnDel.addEventListener('click', function() { deactivateEmployee(emp); });
             tdActions.appendChild(btnDel);
 
             tr.appendChild(tdActions);
@@ -176,18 +180,18 @@
         editingId = emp.id;
         document.getElementById('modalTitle').textContent = '编辑员工';
         document.getElementById('btnSubmitForm').textContent = '更新';
-        document.getElementById('eEmployeeId').value = emp.employee_id || '';
         document.getElementById('eName').value = emp.name || '';
         document.getElementById('eDepartment').value = emp.department || '';
+        document.getElementById('eNotes').value = emp.notes || '';
         openModal();
     }
 
     async function handleSubmit(e) {
         e.preventDefault();
         const payload = {
-            employee_id: document.getElementById('eEmployeeId').value.trim() || null,
             name: document.getElementById('eName').value.trim(),
             department: document.getElementById('eDepartment').value.trim() || null,
+            notes: document.getElementById('eNotes').value.trim() || null,
         };
         if (!payload.name) { alert('请填写姓名'); return; }
 
@@ -202,12 +206,27 @@
         } catch(err) {}
     }
 
-    async function deleteEmployee(emp) {
-        if (!confirm('确定删除员工「' + emp.name + '」吗？\n如果该员工持有资产，需先归还资产才能删除。')) return;
-        try {
-            await apiFetch('/api/employees/' + emp.id, {method: 'DELETE'});
+    async function deactivateEmployee(emp) {
+        if (!confirm('确定停用员工「' + emp.name + '」吗？')) return;
+        const res = await fetch('/api/employees/' + emp.id, {method: 'DELETE'});
+        const data = await res.json();
+        if (res.ok) {
             loadEmployees();
-        } catch(err) {}
+            return;
+        }
+        if (data.requires_asset_transfer) {
+            const ok = confirm('该员工持有 ' + data.asset_count + ' 件资产。是否将名下资产转入库房并停用？');
+            if (!ok) return;
+            try {
+                await apiFetch('/api/employees/' + emp.id, {
+                    method: 'DELETE',
+                    body: JSON.stringify({move_assets_to_stock: true, stock_location: '库房'})
+                });
+                loadEmployees();
+            } catch(e) {}
+        } else {
+            alert(data.error || '操作失败');
+        }
     }
 
     async function handleImport(e) {
@@ -222,11 +241,15 @@
             const resultDiv = document.getElementById('importResult');
             resultDiv.style.display = '';
             resultDiv.replaceChildren();
-            resultDiv.appendChild(document.createTextNode('成功导入 '));
-            const success = document.createElement('strong');
-            success.textContent = result.success;
-            resultDiv.appendChild(success);
-            resultDiv.appendChild(document.createTextNode(' 名员工'));
+            resultDiv.appendChild(document.createTextNode('新增 '));
+            const created = document.createElement('strong');
+            created.textContent = result.created || 0;
+            resultDiv.appendChild(created);
+            resultDiv.appendChild(document.createTextNode(' 名，更新 '));
+            const updated = document.createElement('strong');
+            updated.textContent = result.updated || 0;
+            resultDiv.appendChild(updated);
+            resultDiv.appendChild(document.createTextNode(' 名'));
             if (result.errors && result.errors.length > 0) {
                 resultDiv.appendChild(document.createTextNode('，'));
                 const fail = document.createElement('span');

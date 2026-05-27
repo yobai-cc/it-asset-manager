@@ -58,6 +58,13 @@ def _employee_id_for_user(user):
     return user.get("employee_id") if isinstance(user, dict) else user["employee_id"]
 
 
+def _clean_optional_text(value):
+    if value is None:
+        return None
+    value = str(value).strip()
+    return value or None
+
+
 def _validate_non_negative_int(data, field_name, required=False):
     """验证字段是非负整数，返回 (value, error_response)"""
     val = data.get(field_name)
@@ -2206,15 +2213,21 @@ def api_employees():
     if not user:
         return jsonify({"error": "权限不足"}), 403
     search = request.args.get("search")
+    status = request.args.get("status", "active")
     db = get_db()
     with db.get_conn() as conn:
         q = """SELECT e.*, COUNT(a.id) as asset_count
                FROM employee e LEFT JOIN asset a ON a.current_holder_id = e.id"""
         params = []
         where = []
+        if status != "all":
+            if status not in ("active", "inactive"):
+                return jsonify({"error": "员工状态无效"}), 400
+            where.append("e.status = ?")
+            params.append(status)
         if search:
-            where.append("(e.employee_id LIKE ? OR e.name LIKE ? OR e.department LIKE ?)")
-            params.extend([f"%{search}%"] * 3)
+            where.append("(e.name LIKE ? OR e.department LIKE ?)")
+            params.extend([f"%{search}%"] * 2)
         if where:
             q += " WHERE " + " AND ".join(where)
         q += " GROUP BY e.id ORDER BY e.name"
@@ -2228,24 +2241,21 @@ def api_employees_create():
     if not user:
         return jsonify({"error": "权限不足"}), 403
     data = request.get_json() or {}
-    employee_id = (data.get("employee_id") or "").strip() or None
     name = (data.get("name") or "").strip()
     if not name:
         return jsonify({"error": "缺少员工姓名"}), 400
+    department = _clean_optional_text(data.get("department"))
+    notes = _clean_optional_text(data.get("notes"))
     db = get_db()
-    try:
-        with db.get_conn() as conn:
-            cursor = conn.execute(
-                "INSERT INTO employee (employee_id, name, department) VALUES (?, ?, ?)",
-                (employee_id, name, (data.get("department") or "").strip() or None),
-            )
-            emp_id = cursor.lastrowid
-            row = conn.execute("SELECT * FROM employee WHERE id = ?", (emp_id,)).fetchone()
-            log_activity(conn, user["id"], "create_employee", "employee", emp_id, f"新增员工 {name}")
-    except Exception as e:
-        if "UNIQUE constraint" in str(e):
-            return jsonify({"error": f"工号已存在: {employee_id}"}), 400
-        raise
+    with db.get_conn() as conn:
+        cursor = conn.execute(
+            """INSERT INTO employee (name, department, notes)
+               VALUES (?, ?, ?)""",
+            (name, department, notes),
+        )
+        emp_id = cursor.lastrowid
+        row = conn.execute("SELECT * FROM employee WHERE id = ?", (emp_id,)).fetchone()
+        log_activity(conn, user["id"], "create_employee", "employee", emp_id, f"新增员工 {name}")
     return jsonify(dict(row)), 201
 
 
@@ -2260,24 +2270,20 @@ def api_employees_update(emp_id):
         row = conn.execute("SELECT * FROM employee WHERE id = ?", (emp_id,)).fetchone()
         if not row:
             return jsonify({"error": "员工不存在"}), 404
-        employee_id = data.get("employee_id", row["employee_id"])
-        if employee_id is not None:
-            employee_id = employee_id.strip() or None
         name = (data.get("name", row["name"]) or "").strip()
         if not name:
             return jsonify({"error": "缺少员工姓名"}), 400
-        department = data.get("department", row["department"])
-        if department is not None:
-            department = department.strip() or None
-        try:
-            conn.execute(
-                "UPDATE employee SET employee_id = ?, name = ?, department = ? WHERE id = ?",
-                (employee_id, name, department, emp_id),
-            )
-        except Exception as e:
-            if "UNIQUE constraint" in str(e):
-                return jsonify({"error": f"工号已存在: {employee_id}"}), 400
-            raise
+        department = _clean_optional_text(data.get("department", row["department"]))
+        notes = _clean_optional_text(data.get("notes", row["notes"]))
+        status = data.get("status", row["status"])
+        if status not in ("active", "inactive"):
+            return jsonify({"error": "员工状态无效"}), 400
+        conn.execute(
+            """UPDATE employee
+               SET name = ?, department = ?, notes = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+               WHERE id = ?""",
+            (name, department, notes, status, emp_id),
+        )
         log_activity(conn, user["id"], "update_employee", "employee", emp_id, f"更新员工 {name}")
         row = conn.execute("SELECT * FROM employee WHERE id = ?", (emp_id,)).fetchone()
     return jsonify(dict(row))
@@ -2288,19 +2294,51 @@ def api_employees_delete(emp_id):
     user = require_role("admin")
     if not user:
         return jsonify({"error": "权限不足"}), 403
+    data = request.get_json(silent=True) or {}
+    move_assets_to_stock = bool(data.get("move_assets_to_stock"))
+    stock_location = (data.get("stock_location") or "库房").strip() or "库房"
     db = get_db()
     with db.get_conn() as conn:
         row = conn.execute("SELECT * FROM employee WHERE id = ?", (emp_id,)).fetchone()
         if not row:
             return jsonify({"error": "员工不存在"}), 404
-        assigned = conn.execute(
-            "SELECT COUNT(*) as c FROM asset WHERE current_holder_id = ?", (emp_id,)
-        ).fetchone()["c"]
-        if assigned > 0:
-            return jsonify({"error": f"该员工持有 {assigned} 件资产，请先归还后再删除"}), 400
-        log_activity(conn, user["id"], "delete_employee", "employee", emp_id, f"删除员工 {row['name']}")
-        conn.execute("DELETE FROM employee WHERE id = ?", (emp_id,))
-    return jsonify({"ok": True})
+        assets = conn.execute(
+            """SELECT id FROM asset
+               WHERE current_holder_id = ? AND status != 'scrapped'""",
+            (emp_id,),
+        ).fetchall()
+        if assets and not move_assets_to_stock:
+            return jsonify({
+                "error": f"该员工持有 {len(assets)} 件资产，请先转入库房",
+                "asset_count": len(assets),
+                "requires_asset_transfer": True,
+            }), 400
+        moved_asset_ids = []
+        for asset in assets:
+            moved_asset_ids.append(asset["id"])
+            conn.execute(
+                """UPDATE asset
+                   SET status = 'in_stock', current_holder_id = NULL, location = ?,
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ?""",
+                (stock_location, asset["id"]),
+            )
+            conn.execute(
+                """INSERT INTO lifecycle_event
+                   (asset_id, event_type, operator_id, target_employee_id, to_location, notes)
+                   VALUES (?, 'return', ?, ?, ?, ?)""",
+                (asset["id"], user["id"], emp_id, stock_location, f"员工停用，资产转入{stock_location}"),
+            )
+            log_activity(conn, user["id"], "return", "asset", asset["id"],
+                         f"员工 {row['name']} 停用，资产转入{stock_location}")
+        conn.execute(
+            "UPDATE employee SET status = 'inactive', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (emp_id,),
+        )
+        log_activity(conn, user["id"], "deactivate_employee", "employee", emp_id,
+                     f"停用员工 {row['name']}，转入库房资产 {len(moved_asset_ids)} 件")
+        updated = conn.execute("SELECT * FROM employee WHERE id = ?", (emp_id,)).fetchone()
+    return jsonify({"ok": True, "employee": dict(updated), "moved_asset_ids": moved_asset_ids})
 
 
 @app.route("/api/employees/import", methods=["POST"])
@@ -2325,29 +2363,73 @@ def api_employees_import():
         return jsonify({"error": f"缺少必填列: {', '.join(missing)}"}), 400
 
     db = get_db()
-    success = 0
+    created = 0
+    updated = 0
     errors = []
     with db.get_conn() as conn:
         for i, row in enumerate(reader, start=2):
-            employee_id = (row.get("employee_id") or "").strip() or None
+            system_id_raw = (row.get("system_id") or "").strip()
             name = (row.get("name") or "").strip()
             department = (row.get("department") or "").strip() or None
+            notes = (row.get("notes") or "").strip() or None
             if not name:
                 errors.append({"row": i, "error": "姓名为空"})
                 continue
-            try:
+            if system_id_raw:
+                try:
+                    system_id = int(system_id_raw)
+                except ValueError:
+                    errors.append({"row": i, "error": "system_id 必须是数字"})
+                    continue
+                existing = conn.execute("SELECT * FROM employee WHERE id = ?", (system_id,)).fetchone()
+                if not existing:
+                    errors.append({"row": i, "error": f"system_id 不存在: {system_id}"})
+                    continue
                 conn.execute(
-                    "INSERT INTO employee (employee_id, name, department) VALUES (?, ?, ?)",
-                    (employee_id, name, department),
+                    """UPDATE employee
+                       SET name = ?, department = ?, notes = ?, status = 'active',
+                           updated_at = CURRENT_TIMESTAMP
+                       WHERE id = ?""",
+                    (name, department, notes, system_id),
                 )
-                success += 1
-            except Exception as e:
-                errors.append({"row": i, "error": str(e)})
-        if success > 0:
-            log_activity(conn, user["id"], "import_employees", "employee", None,
-                         f"导入 {success} 名员工，失败 {len(errors)} 条")
+                updated += 1
+                continue
 
-    return jsonify({"success": success, "errors": errors, "total": success + len(errors)})
+            matches = conn.execute(
+                """SELECT id FROM employee
+                   WHERE name = ?
+                     AND COALESCE(department, '') = COALESCE(?, '')""",
+                (name, department),
+            ).fetchall()
+            if len(matches) == 1:
+                conn.execute(
+                    """UPDATE employee
+                       SET name = ?, department = ?, notes = ?, status = 'active',
+                           updated_at = CURRENT_TIMESTAMP
+                       WHERE id = ?""",
+                    (name, department, notes, matches[0]["id"]),
+                )
+                updated += 1
+            elif len(matches) > 1:
+                errors.append({"row": i, "error": f"姓名和部门匹配到多个员工，需提供 system_id: {name}"})
+            else:
+                conn.execute(
+                    "INSERT INTO employee (name, department, notes) VALUES (?, ?, ?)",
+                    (name, department, notes),
+                )
+                created += 1
+        if created or updated:
+            log_activity(conn, user["id"], "import_employees", "employee", None,
+                         f"导入员工：新增 {created}，更新 {updated}，失败 {len(errors)} 条")
+
+    success = created + updated
+    return jsonify({
+        "success": success,
+        "created": created,
+        "updated": updated,
+        "errors": errors,
+        "total": success + len(errors),
+    })
 
 
 # ---- API: 管理员用户管理 ----
@@ -2394,17 +2476,6 @@ def api_users_create():
                 ),
             )
             uid = cursor.lastrowid
-            conn.execute(
-                """INSERT INTO employee (employee_id, name, department)
-                   VALUES (?, ?, ?)
-                   ON CONFLICT(employee_id) DO UPDATE SET
-                       name = excluded.name,
-                       department = excluded.department""",
-                (
-                    data["employee_id"], data["name"],
-                    data.get("department"),
-                ),
-            )
             log_activity(conn, user["id"], "create_user", "user", uid,
                          f"创建用户 {data['employee_id']}")
             row = conn.execute(
@@ -2473,15 +2544,6 @@ def api_users_update(user_id):
                 f'UPDATE "user" SET {", ".join(fields)} WHERE id = ?',
                 params + [user_id],
             )
-            if "name" in data or "department" in data:
-                updated_name = data.get("name", row["name"])
-                updated_department = data.get("department", row["department"])
-                conn.execute(
-                    """UPDATE employee
-                       SET name = ?, department = ?
-                       WHERE employee_id = ?""",
-                    (updated_name, updated_department, row["employee_id"]),
-                )
             log_activity(conn, admin["id"], "update_user", "user", user_id,
                          f"更新字段: {', '.join(fields)}")
         row = conn.execute(
@@ -2543,16 +2605,6 @@ def api_users_delete(user_id):
             return jsonify({"error": "不能删除系统最后一个管理员"}), 400
         if is_self:
             return jsonify({"error": "不能删除自己"}), 400
-        emp = conn.execute(
-            "SELECT id FROM employee WHERE employee_id = ?",
-            (dict(row)["employee_id"],),
-        ).fetchone()
-        if emp:
-            assigned = conn.execute(
-                "SELECT COUNT(*) as c FROM asset WHERE current_holder_id = ?", (emp["id"],)
-            ).fetchone()["c"]
-            if assigned > 0:
-                return jsonify({"error": f"该用户关联的员工持有 {assigned} 件资产，请先归还后再删除"}), 400
         log_activity(conn, admin["id"], "delete_user", "user", user_id,
                      f"删除用户 {dict(row)['employee_id']}")
         conn.execute('DELETE FROM "user" WHERE id = ?', (user_id,))

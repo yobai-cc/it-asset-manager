@@ -155,9 +155,9 @@ def seed_test_data(db):
     """插入测试基础数据"""
     with db.get_conn() as conn:
         # 员工
-        conn.execute("INSERT INTO employee (employee_id, name, department) VALUES ('admin', '管理员', 'IT部')")
-        conn.execute("INSERT INTO employee (employee_id, name, department) VALUES ('emp001', '张三', '研发部')")
-        conn.execute("INSERT INTO employee (employee_id, name, department) VALUES ('emp002', '李四', '市场部')")
+        conn.execute("INSERT INTO employee (name, department) VALUES ('管理员', 'IT部')")
+        conn.execute("INSERT INTO employee (name, department) VALUES ('张三', '研发部')")
+        conn.execute("INSERT INTO employee (name, department) VALUES ('李四', '市场部')")
 
         # 用户
         conn.execute(
@@ -606,8 +606,8 @@ class TestApplications:
 # ---- 员工自助测试 ----
 
 class TestEmployeeSelfService:
-    def test_my_assets(self, app_client, db):
-        """AC14: 员工查看名下资产"""
+    def test_my_assets_unlinked_system_user_has_no_roster_assets(self, app_client, db):
+        """普通员工不再默认登录系统；未绑定花名册的系统用户不返回资产。"""
         seed_test_data(db)
         login_admin(app_client)
         res = app_client.post("/api/assets", json={"name": "PC", "category": "computer"})
@@ -617,9 +617,9 @@ class TestEmployeeSelfService:
         res = app_client.get("/api/my/assets")
         assert res.status_code == 200
         assets = res.get_json()["assets"]
-        assert any(a["id"] == aid for a in assets)
+        assert all(a["id"] != aid for a in assets)
 
-    def test_my_assets_search(self, app_client, db):
+    def test_my_assets_search_unlinked_user_returns_empty(self, app_client, db):
         seed_test_data(db)
         login_admin(app_client)
         app_client.post("/api/assets", json={"name": "ThinkPad", "category": "computer"})
@@ -629,34 +629,18 @@ class TestEmployeeSelfService:
 
         login_employee(app_client)
         res = app_client.get("/api/my/assets?search=ThinkPad")
-        assert len(res.get_json()["assets"]) >= 1
+        assert res.get_json()["assets"] == []
 
-    def test_my_assets_match_employee_by_employee_id_not_name(self, app_client, db):
-        """员工自助资产必须按工号关联，避免重名员工串号。"""
+    def test_employee_list_hides_inactive_by_default(self, app_client, db):
+        """员工列表默认只显示在职花名册，停用员工需显式请求 inactive/all。"""
         seed_test_data(db)
         login_admin(app_client)
-        create_user = app_client.post("/api/users", json={
-            "employee_id": "emp_dup",
-            "name": "张三",
-            "department": "销售部",
-            "role": "employee",
-            "password": "emp_dup",
-        })
-        assert create_user.status_code == 201
-        employees = app_client.get("/api/employees").get_json()["employees"]
-        dup_employee = next(e for e in employees if e["employee_id"] == "emp_dup")
-
-        res = app_client.post("/api/assets", json={"name": "Duplicate Name PC", "category": "computer"})
-        aid = res.get_json()["id"]
-        app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": dup_employee["id"]})
-
-        login_employee(app_client)
-        emp001_assets = app_client.get("/api/my/assets").get_json()["assets"]
-        assert all(a["id"] != aid for a in emp001_assets)
-
-        login_employee(app_client, "emp_dup")
-        dup_assets = app_client.get("/api/my/assets").get_json()["assets"]
-        assert any(a["id"] == aid for a in dup_assets)
+        app_client.put("/api/employees/2", json={"name": "张三", "department": "研发部", "status": "inactive"})
+        res = app_client.get("/api/employees")
+        names = [e["name"] for e in res.get_json()["employees"]]
+        assert "张三" not in names
+        inactive = app_client.get("/api/employees", query_string={"status": "inactive"})
+        assert any(e["name"] == "张三" for e in inactive.get_json()["employees"])
 
 
 # ---- 标签/二维码测试 ----
@@ -800,6 +784,55 @@ class TestLabelAndQR:
             assert conn.execute("SELECT COUNT(*) FROM asset WHERE name = 'Good PC'").fetchone()[0] == 1
             assert conn.execute("SELECT COUNT(*) FROM asset WHERE name = 'Bad PC'").fetchone()[0] == 0
 
+    def test_employee_import_creates_and_updates_intelligently(self, app_client, db):
+        """员工导入：system_id 精准更新，姓名+部门唯一匹配更新，其他新增。"""
+        import io
+
+        seed_test_data(db)
+        login_admin(app_client)
+        csv_text = (
+            "system_id,name,department,notes\n"
+            "2,张三,研发平台,按系统ID更新\n"
+            ",李四,市场部,按姓名部门更新\n"
+            ",王五,财务部,新增员工\n"
+        )
+        res = app_client.post(
+            "/api/employees/import",
+            data={"file": (io.BytesIO(csv_text.encode("utf-8")), "employees.csv")},
+            content_type="multipart/form-data",
+        )
+        assert res.status_code == 200
+        payload = res.get_json()
+        assert payload["created"] == 1
+        assert payload["updated"] == 2
+        assert payload["errors"] == []
+        with db.get_conn() as conn:
+            zhang = conn.execute("SELECT * FROM employee WHERE id = 2").fetchone()
+            li = conn.execute("SELECT * FROM employee WHERE name = '李四'").fetchone()
+            wang = conn.execute("SELECT * FROM employee WHERE name = '王五'").fetchone()
+            assert zhang["department"] == "研发平台"
+            assert zhang["notes"] == "按系统ID更新"
+            assert li["notes"] == "按姓名部门更新"
+            assert wang["department"] == "财务部"
+
+    def test_employee_import_rejects_ambiguous_name_department_without_system_id(self, app_client, db):
+        """允许重名员工；无 system_id 且姓名+部门重复时不能自动更新。"""
+        import io
+
+        seed_test_data(db)
+        login_admin(app_client)
+        app_client.post("/api/employees", json={"name": "张三", "department": "研发部"})
+        csv_text = "name,department,notes\n张三,研发部,无法判断\n"
+        res = app_client.post(
+            "/api/employees/import",
+            data={"file": (io.BytesIO(csv_text.encode("utf-8")), "employees.csv")},
+            content_type="multipart/form-data",
+        )
+        assert res.status_code == 200
+        payload = res.get_json()
+        assert payload["success"] == 0
+        assert "多个员工" in payload["errors"][0]["error"]
+
 
 # ---- 新增增强功能回归测试 ----
 
@@ -837,6 +870,9 @@ class TestEnhancementRegressions:
             employee_indexes = [r[1] for r in conn.execute("PRAGMA index_list(employee)").fetchall()]
             assert "warranty_date" in asset_cols
             assert "employee_id" in employee_cols
+            assert "status" in employee_cols
+            assert "notes" in employee_cols
+            assert "updated_at" in employee_cols
             assert "activity_log" in tables
             assert "app_config" in tables
             assert "idx_employee_employee_id" in employee_indexes
@@ -1835,8 +1871,8 @@ class TestUserManagementAPI:
         assert row["password_hash"] != "pass123"
         assert "$" in row["password_hash"]
 
-    def test_create_user_syncs_employee_record(self, app_client, db):
-        """创建登录用户时同步员工名单，供资产分配和自助资产查询使用。"""
+    def test_create_user_does_not_create_employee_record(self, app_client, db):
+        """创建登录用户不应自动新增花名册员工。"""
         seed_test_data(db)
         login_admin(app_client)
         res = app_client.post("/api/users", json={
@@ -1848,9 +1884,7 @@ class TestUserManagementAPI:
         })
         assert res.status_code == 201
         employees = app_client.get("/api/employees").get_json()["employees"]
-        created = next(e for e in employees if e["employee_id"] == "emp_sync")
-        assert created["name"] == "同步员工"
-        assert created["department"] == "运维部"
+        assert all(e["name"] != "同步员工" for e in employees)
 
     def test_create_user_duplicate_employee_id_fails(self, app_client, db):
         """重复工号应返回 400"""
@@ -1951,16 +1985,47 @@ class TestUserManagementAPI:
         res = app_client.delete(f"/api/users/{uid}")
         assert res.status_code == 200
 
-    def test_delete_user_with_assigned_assets_fails(self, app_client, db):
-        """删除持有资产的用户应返回 400"""
+    def test_delete_user_does_not_depend_on_employee_assets(self, app_client, db):
+        """删除系统用户不应受花名册资产约束。"""
         seed_test_data(db)
         login_admin(app_client)
-        # 分配资产给 emp001 (id=2)
         create_res = app_client.post("/api/assets", json={"name": "PC", "category": "computer"})
         aid = create_res.get_json()["id"]
         app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
         res = app_client.delete("/api/users/2")
+        assert res.status_code == 200
+
+    def test_delete_employee_requires_stock_transfer(self, app_client, db):
+        """停用员工时若持有资产，应提示先转入库房。"""
+        seed_test_data(db)
+        login_admin(app_client)
+        create_res = app_client.post("/api/assets", json={"name": "PC", "category": "computer"})
+        aid = create_res.get_json()["id"]
+        app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
+        res = app_client.delete("/api/employees/2")
         assert res.status_code == 400
+        assert res.get_json()["requires_asset_transfer"] is True
+
+    def test_delete_employee_moves_assets_to_stock_when_requested(self, app_client, db):
+        """停用员工并转库房时，资产应回收入库。"""
+        seed_test_data(db)
+        login_admin(app_client)
+        create_res = app_client.post("/api/assets", json={"name": "PC", "category": "computer"})
+        aid = create_res.get_json()["id"]
+        app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
+        res = app_client.delete(
+            "/api/employees/2",
+            json={"move_assets_to_stock": True, "stock_location": "库房"},
+        )
+        assert res.status_code == 200
+        payload = res.get_json()
+        assert payload["employee"]["status"] == "inactive"
+        assert aid in payload["moved_asset_ids"]
+        with db.get_conn() as conn:
+            asset = conn.execute("SELECT * FROM asset WHERE id = ?", (aid,)).fetchone()
+            assert asset["status"] == "in_stock"
+            assert asset["current_holder_id"] is None
+            assert asset["location"] == "库房"
 
     def test_delete_self_fails(self, app_client, db):
         """管理员不能删除自己，避免锁死当前会话"""

@@ -17,12 +17,15 @@
 SQLite 文件 `it_asset.db`，10 张表：
 
 ```
-employee (员工名单)
+employee (员工花名册)
 ├── id PK
-├── employee_id TEXT UNIQUE
+├── employee_id TEXT UNIQUE (兼容字段，非前端主展示字段)
 ├── name NOT NULL
 ├── department
-└── created_at
+├── status [active|inactive]
+├── notes
+├── created_at
+└── updated_at
 
 user (系统登录账号)
 ├── id PK
@@ -134,8 +137,8 @@ maintenance ──maintenance_end──> assigned | in_stock
 | `/settings` | admin | 系统设置 |
 | `/activity` | admin | 操作记录 |
 | `/scan`, `/scan/<id>` | 公开 | 扫码页面 |
-| `/my/assets`, `/my/assets/<id>` | employee | 员工资产 |
-| `/my/applications`, `/my/applications/new` | employee | 员工申请 |
+| `/my/assets`, `/my/assets/<id>` | employee | 员工资产（保留的自助页） |
+| `/my/applications`, `/my/applications/new` | employee | 员工申请（保留的自助页） |
 
 ### API 路由（~60 条）
 
@@ -146,7 +149,7 @@ maintenance ──maintenance_end──> assigned | in_stock
 - **生命周期**：assign, return, transfer, maintenance_start, maintenance_end, scrap, events
 - **维修**：列表、资产维修记录
 - **申请**：列表、创建、审批(approve/reject)
-- **员工自助**：my/assets, my/applications
+- **员工自助**：my/assets, my/applications（保留）
 - **员工管理**：列表、创建、更新、删除、批量导入
 - **用户管理**：列表、创建、详情、更新、删除、重置密码
 - **耗材**：CRUD、库存调整、更换、更换历史、打印机耗材聚合
