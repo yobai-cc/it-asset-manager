@@ -6,13 +6,26 @@
 <div id="scanArea" style="max-width:400px;margin:0 auto;">
     <div id="reader" style="width:100%;"></div>
     <p id="scanStatus" style="text-align:center;margin-top:12px;color:var(--text-muted);">正在启动摄像头...</p>
-    <div id="scanError" style="display:none;text-align:center;margin-top:12px;">
-        <p style="color:var(--danger);margin-bottom:12px;" id="scanErrorMsg"></p>
-        <a href="/my/assets" class="btn btn-secondary">返回我的资产</a>
-    </div>
 </div>
 
-<div id="manualInput" style="max-width:400px;margin:24px auto 0;">
+<!-- 拍照扫码降级区（HTTP 下自动显示） -->
+<div id="photoScanArea" style="display:none;max-width:400px;margin:0 auto;text-align:center;">
+    <div style="border:2px dashed var(--color-border);border-radius:var(--radius-medium);padding:var(--space-4);cursor:pointer;"
+         onclick="document.getElementById('photoInput').click()">
+        <div style="font-size:48px;margin-bottom:8px;">📷</div>
+        <p style="font-weight:500;">点击拍照扫码</p>
+        <p style="color:var(--color-text-muted);font-size:14px;">对准资产二维码拍照即可识别</p>
+    </div>
+    <input type="file" id="photoInput" accept="image/*" capture="environment"
+           style="display:none;" onchange="handlePhotoScan(this)">
+    <p id="photoStatus" style="margin-top:12px;color:var(--color-text-muted);display:none;">正在识别...</p>
+</div>
+
+<div id="scanError" style="display:none;max-width:400px;margin:0 auto;text-align:center;">
+    <p style="color:var(--danger);margin-bottom:12px;" id="scanErrorMsg"></p>
+</div>
+
+<div style="max-width:400px;margin:24px auto 0;">
     <div class="form-group">
         <label>手动输入资产标签号</label>
         <div style="display:flex;gap:8px;">
@@ -57,26 +70,28 @@ function onScanSuccess(decodedText) {
     }
 }
 
-function onScanFailure() {
-    // 静默，持续扫描
-}
+function onScanFailure() {}
 
 function onScanStarted() {
     document.getElementById('scanStatus').textContent = '请将二维码对准摄像头';
 }
 
 function onScanError(err) {
-    const msg = String(err);
+    // 摄像头不可用时，切换到拍照扫码模式
     document.getElementById('scanArea').style.display = 'none';
-    document.getElementById('scanError').style.display = 'block';
+    document.getElementById('photoScanArea').style.display = 'block';
+
     const errEl = document.getElementById('scanErrorMsg');
+    const errDiv = document.getElementById('scanError');
+    const msg = String(err);
     if (msg.includes('NotAllowed') || msg.includes('Permission')) {
-        errEl.textContent = '摄像头权限被拒绝。请在浏览器地址栏左侧点击图标，允许摄像头访问后刷新页面。';
+        errEl.textContent = '摄像头权限被拒绝，已切换为拍照扫码模式。';
+        errDiv.style.display = 'block';
     } else if (msg.includes('NotFound') || msg.includes('device not found')) {
-        errEl.textContent = '未检测到摄像头设备。请确认设备配有摄像头，或使用下方手动输入。';
-    } else {
-        errEl.textContent = '摄像头启动失败。请检查摄像头是否正常，或使用下方手动输入。';
+        errEl.textContent = '未检测到摄像头设备，请使用拍照或手动输入。';
+        errDiv.style.display = 'block';
     }
+    // 其他错误（如 HTTP 环境下 getUserMedia 被拦截）静默切换，不显示错误
 }
 
 const html5QrCode = new Html5Qrcode("reader");
@@ -86,6 +101,24 @@ html5QrCode.start(
     onScanSuccess,
     onScanFailure
 ).then(onScanStarted).catch(onScanError);
+
+function handlePhotoScan(input) {
+    if (!input.files || !input.files[0]) return;
+    const statusEl = document.getElementById('photoStatus');
+    statusEl.style.display = 'block';
+    statusEl.textContent = '正在识别...';
+    statusEl.style.color = 'var(--color-text-muted)';
+
+    html5QrCode.scanFile(input.files[0], true)
+        .then(function(decodedText) {
+            onScanSuccess(decodedText);
+        })
+        .catch(function(err) {
+            statusEl.textContent = '未识别到二维码，请重新拍照。确保二维码清晰完整。';
+            statusEl.style.color = 'var(--danger)';
+        });
+    input.value = '';
+}
 
 function renderResult(asset, tag) {
     const statusLabels = {in_stock:'库存',assigned:'在用',maintenance:'维修中',scrapped:'已报废'};
@@ -143,7 +176,7 @@ function renderResult(asset, tag) {
 }
 
 async function lookupByTag(tag) {
-    const statusEl = document.getElementById('scanStatus');
+    const statusEl = document.getElementById('scanStatus') || document.getElementById('photoStatus');
     try {
         const res = await fetch('/api/public/asset-lookup?asset_tag=' + encodeURIComponent(tag));
         const data = await res.json();
@@ -161,7 +194,7 @@ async function lookupByTag(tag) {
 
 async function searchByTag() {
     const tag = document.getElementById('manualTag').value.trim();
-    const statusEl = document.getElementById('scanStatus');
+    const statusEl = document.getElementById('scanStatus') || document.getElementById('photoStatus');
     if (!tag) {
         statusEl.textContent = '请输入资产标签号（如 PC-2026-0001）';
         statusEl.style.color = 'var(--warning)';
