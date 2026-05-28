@@ -2995,3 +2995,81 @@ class TestCSSAssets:
                 balance -= 1
             assert balance >= 0, f"extra closing brace at byte {i}"
         assert balance == 0, f"unbalanced braces: {balance} unclosed blocks"
+
+
+class TestHealthEndpoint:
+    def test_health_ok(self, app_client, db):
+        """健康检查端点返回 200"""
+        res = app_client.get("/api/health")
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data["status"] == "ok"
+        assert data["db"] == "connected"
+
+
+class TestErrorPages:
+    def test_404_page(self, app_client, db):
+        """不存在的页面返回 404 HTML"""
+        res = app_client.get("/nonexistent-page")
+        assert res.status_code == 404
+        assert b"404" in res.data
+        assert "页面未找到" in res.data.decode("utf-8")
+
+    def test_404_api_still_json(self, app_client, db):
+        """API 路由不存在的资源返回 JSON 404"""
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.get("/api/assets/99999")
+        assert res.status_code == 404
+        assert res.content_type.startswith("application/json")
+
+
+class TestEmployeeImportTemplate:
+    def test_template_download(self, app_client, db):
+        """员工导入模板下载返回 CSV"""
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.get("/api/employees/import/template")
+        assert res.status_code == 200
+        assert "text/csv" in res.content_type
+        assert res.headers["Content-Disposition"].startswith("attachment")
+        text = res.data.decode("utf-8-sig")
+        assert "name" in text
+        assert "department" in text
+
+    def test_template_requires_admin(self, app_client, db):
+        """模板下载需要管理员权限"""
+        seed_test_data(db)
+        login_employee(app_client)
+        res = app_client.get("/api/employees/import/template")
+        assert res.status_code == 403
+
+
+class TestActivityExport:
+    def test_activity_export(self, app_client, db):
+        """操作记录导出返回 CSV"""
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.get("/api/activity/export")
+        assert res.status_code == 200
+        assert "text/csv" in res.content_type
+        text = res.data.decode("utf-8-sig")
+        assert "时间" in text
+        assert "操作人" in text
+        assert "登录" in text
+
+    def test_activity_export_with_filter(self, app_client, db):
+        """操作记录导出支持按操作类型筛选"""
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.get("/api/activity/export?action=login")
+        assert res.status_code == 200
+        text = res.data.decode("utf-8-sig")
+        assert "登录" in text
+
+    def test_activity_export_requires_admin(self, app_client, db):
+        """操作记录导出需要管理员权限"""
+        seed_test_data(db)
+        login_employee(app_client)
+        res = app_client.get("/api/activity/export")
+        assert res.status_code == 403

@@ -66,6 +66,7 @@
         <div style="margin-bottom:12px;color:var(--color-text-muted);font-size:14px;line-height:1.6;">
             <p>CSV 格式（UTF-8 编码），必填列：<strong>name</strong>（姓名），可选列：<strong>department</strong>（部门）、<strong>notes</strong>（备注）。</p>
             <p>如从系统导出后再导入，可保留 <strong>system_id</strong> 列用于精准更新；没有 system_id 时按姓名+部门唯一匹配，重名冲突会进入错误列表。</p>
+            <p><a href="/api/employees/import/template" style="color:var(--color-primary);">下载导入模板</a>（填写后上传即可）</p>
         </div>
         <form id="importForm" enctype="multipart/form-data">
             <div class="form-group">

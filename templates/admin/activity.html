@@ -6,6 +6,9 @@
         <h1 class="page-title">操作记录</h1>
         <p class="page-subtitle">系统内所有操作的审计日志</p>
     </div>
+    <div class="page-actions">
+        <button class="btn btn-secondary" type="button" onclick="exportActivity()">导出CSV</button>
+    </div>
 </div>
 <div class="filter-bar">
     <select id="actionFilter" class="input" onchange="loadActivity()">
@@ -79,5 +82,12 @@ async function loadActivity(page = 1) {
 }
 
 loadActivity();
+
+function exportActivity() {
+    const action = document.getElementById('actionFilter').value;
+    let url = '/api/activity/export';
+    if (action) url += '?action=' + encodeURIComponent(action);
+    window.location.href = url;
+}
 </script>
 {% endblock %}

@@ -55,7 +55,49 @@ python3 server.py
 .venv/bin/python -m pytest tests/ -q
 ```
 
-当前测试规模：158 个 pytest 测试。
+当前测试规模：202 个 pytest 测试。
+
+## 生产部署
+
+### 安装
+
+```bash
+cd /home/yobai/it-asset-manager
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python init_db.py          # 首次初始化数据库
+```
+
+### 使用 Gunicorn 运行（推荐）
+
+```bash
+.venv/bin/gunicorn -c gunicorn.conf.py "server:app"
+```
+
+### 使用 systemd 管理
+
+```bash
+sudo cp contrib/it-asset-manager.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now it-asset-manager
+sudo systemctl status it-asset-manager
+```
+
+### Caddy 反向代理
+
+```
+http://10.18.0.68:9090 {
+    reverse_proxy 127.0.0.1:5000
+}
+```
+
+### 环境变量
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `SECRET_KEY` | Flask 会话密钥，不设置则自动生成并保存到 `.secret_key` | 自动生成 |
+| `DB_PATH` | SQLite 数据库文件路径 | `it_asset.db` |
+| `FLASK_DEBUG` | 开发模式（`1`/`true`/`yes`），仅用于 `python server.py` 启动 | 关闭 |
 
 ## 页面说明
 
@@ -118,7 +160,7 @@ it-asset-manager/
 ├── server.py                 # Flask 应用：页面路由 + JSON/CSV/API
 ├── models.py                 # 常量、SQLite schema、Database 封装、迁移
 ├── init_db.py                # 数据库初始化 + 演示种子数据
-├── requirements.txt          # Flask, qrcode, Pillow, pytest
+├── requirements.txt          # Flask, gunicorn, qrcode, Pillow, pytest
 ├── it_asset.db               # SQLite 数据库文件（运行时生成）
 ├── CLAUDE.md                 # 当前最完整的开发/维护文档
 ├── CHANGELOG.md              # 改动历史
@@ -151,7 +193,7 @@ it-asset-manager/
 │       ├── applications.html
 │       └── application_form.html
 └── tests/
-    └── test_api.py           # 158 个自动化测试
+    └── test_api.py           # 202+ 个自动化测试
 ```
 
 ## API 端点
@@ -205,6 +247,7 @@ it-asset-manager/
 - `GET /api/stats` — 仪表盘统计数据（含保修即将到期/已过期）
 - `GET /api/categories` — 分类元数据
 - `GET /api/activity` — 操作记录列表
+- `GET /api/activity/export` — 操作记录 CSV 导出（支持 `?action=` 筛选）
 
 ### 标签与设置
 
@@ -233,10 +276,23 @@ it-asset-manager/
 - `POST /api/users/:id/reset-password` — 重置密码
 - `DELETE /api/users/:id` — 删除用户（含服务端保护）
 
+### 员工管理
+
+- `GET /api/employees` — 员工列表
+- `POST /api/employees` — 新增员工
+- `PUT /api/employees/:id` — 编辑员工
+- `DELETE /api/employees/:id` — 删除员工
+- `POST /api/employees/import` — CSV 批量导入
+- `GET /api/employees/import/template` — CSV 导入模板下载
+
 ### 公开扫码
 
 - `GET /api/public/asset/:id` — 公开资产摘要
 - `GET /api/public/asset-lookup?asset_tag=...` — 按资产编号查公开资产
+
+### 系统运维
+
+- `GET /api/health` — 健康检查（无需认证）
 
 ## 数据库和迁移约定
 
@@ -253,4 +309,4 @@ it-asset-manager/
 - 无采购/合同管理。
 - 无资产自动发现/网络扫描。
 - 中文界面，未国际化。
-- 当前启动方式为 Flask 开发服务器，生产建议改用 Gunicorn + systemd，并继续由 Caddy 反代。
+- 当前启动方式支持 Gunicorn + systemd 生产部署，开发模式用 `python3 server.py`。

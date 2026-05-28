@@ -49,13 +49,15 @@ it-asset-manager/
 ├── server.py              # Flask 应用：所有路由 + API（单文件，~2568 行）
 ├── models.py              # 数据模型、常量、Schema SQL、工具函数
 ├── init_db.py             # 数据库初始化 + 种子数据
-├── requirements.txt       # Flask, qrcode, Pillow, pytest
+├── requirements.txt       # Flask, gunicorn, qrcode, Pillow, pytest
+├── gunicorn.conf.py       # Gunicorn 生产配置
 ├── it_asset.db            # SQLite 数据库文件（运行时生成）
 ├── static/
 │   ├── style.css          # 前端重构样式：Design Tokens、App Shell、抽屉、标签预览、移动端卡片
 │   └── uploads/           # 企业 Logo 上传目录
 ├── templates/
 │   ├── base.html          # 管理端 App Shell、全局详情抽屉、apiFetch()
+│   ├── error.html         # 404/500 错误页
 │   ├── login.html         # 登录页
 │   ├── scan.html          # QR 扫码落地页（移动端，独立页面）
 │   ├── scan_camera.html   # 摄像头扫码页（html5-qrcode 库）
@@ -78,7 +80,9 @@ it-asset-manager/
 │       ├── applications.html    # 我的申请
 │       └── application_form.html # 提交申请
 └── tests/
-    └── test_api.py        # 202 个自动化测试
+    └── test_api.py        # 202+ 个自动化测试
+├── contrib/
+│   └── it-asset-manager.service  # systemd 服务文件
 ```
 
 ---
@@ -269,7 +273,7 @@ in_stock ──assign──> assigned ──return──> in_stock
 
 **用户**：`GET /api/users`、`POST /api/users`、`GET /api/users/<id>`、`PUT /api/users/<id>`、`DELETE /api/users/<id>`、`POST /api/users/<id>/reset-password`
 
-**员工**：`GET /api/employees`、`POST /api/employees`、`PUT /api/employees/<id>`、`DELETE /api/employees/<id>`
+**员工**：`GET /api/employees`、`POST /api/employees`、`PUT /api/employees/<id>`、`DELETE /api/employees/<id>`、`POST /api/employees/import`、`GET /api/employees/import/template`
 
 **耗材**：`GET /api/consumables`、`POST /api/consumables`、`GET/PUT/DELETE /api/consumables/<id>`、`POST /api/consumables/<id>/adjust`、`POST /api/consumables/<id>/replace`、`GET /api/consumables/<id>/replacements`、`GET /api/printers/consumables`
 
@@ -286,7 +290,9 @@ in_stock ──assign──> assigned ──return──> in_stock
 
 **导入**：`POST /api/assets/import`（CSV 批量导入，返回 success/errors/total）
 
-**操作记录**：`GET /api/activity`
+**操作记录**：`GET /api/activity`、`GET /api/activity/export`（CSV 导出，支持 `?action=` 筛选）
+
+**健康检查**：`GET /api/health`（无需认证，返回 DB 连通性）
 
 **公开**：`GET /api/public/asset/<id>`（扫码页用，无需认证）
 
@@ -470,6 +476,19 @@ const catLabels = {computer:'电脑', monitor:'显示器', ...};
 ## 部署
 
 ```bash
+# 开发模式
+cd /home/yobai/it-asset-manager
+python3 server.py
+
+# 生产模式（推荐）
+.venv/bin/gunicorn -c gunicorn.conf.py "server:app"
+
+# systemd 服务
+sudo cp contrib/it-asset-manager.service /etc/systemd/system/
+sudo systemctl enable --now it-asset-manager
+```
+
+```bash
 # Caddy 配置（/etc/caddy/Caddyfile）
 http://10.18.0.68:9090 {
     reverse_proxy 127.0.0.1:5000
@@ -477,13 +496,15 @@ http://10.18.0.68:9090 {
 
 # UFW 防火墙
 sudo ufw allow 9090/tcp
-
-# 启动（开发模式）
-cd /home/yobai/it-asset-manager
-python3 server.py
-
-# 启动（生产建议用 systemd + gunicorn）
 ```
+
+### 环境变量
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `SECRET_KEY` | Flask 会话密钥，不设置则自动生成并保存到 `.secret_key` | 自动生成 |
+| `DB_PATH` | SQLite 数据库文件路径 | `it_asset.db` |
+| `FLASK_DEBUG` | 开发模式（仅 `python server.py` 启动时生效） | 关闭 |
 
 ---
 
@@ -494,4 +515,3 @@ python3 server.py
 - 无采购/合同管理
 - 无资产自动发现
 - 中文界面，未国际化
-- Flask 开发服务器，生产应用 Gunicorn

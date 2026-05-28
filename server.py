@@ -2,6 +2,7 @@
 import csv
 import io
 import json
+import logging
 import os
 from datetime import date, datetime
 from flask import Flask, g, jsonify, request, render_template, redirect, url_for, session, Response
@@ -15,7 +16,32 @@ from models import (
 )
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
+
+
+def _resolve_secret_key():
+    env_key = os.environ.get("SECRET_KEY")
+    if env_key:
+        return env_key
+    key_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".secret_key")
+    try:
+        with open(key_file, "r") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        import secrets
+        key = secrets.token_hex(32)
+        with open(key_file, "w") as f:
+            f.write(key)
+        return key
+
+
+app.secret_key = _resolve_secret_key()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 DB_PATH = os.environ.get("DB_PATH", "it_asset.db")
 
@@ -395,6 +421,7 @@ def api_login():
                 return jsonify({"error": "密码错误"}), 401
         session["user_id"] = user["id"]
         session["role"] = user["role"]
+        logger.info("User %s (role=%s) logged in", employee_id, user["role"])
         log_activity(conn, user["id"], "login", "user", user["id"], f"用户 {employee_id} 登录")
         return jsonify({"user": _user_dict(user)})
 
@@ -1486,6 +1513,51 @@ def api_activity():
     return jsonify({"total": total, "page": page, "logs": [dict(r) for r in rows]})
 
 
+@app.route("/api/activity/export")
+def api_activity_export():
+    user = require_role("admin")
+    if not user:
+        return jsonify({"error": "权限不足"}), 403
+    action = request.args.get("action")
+    db = get_db()
+    where_clauses = []
+    params = []
+    if action:
+        where_clauses.append("al.action = ?")
+        params.append(action)
+    where = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
+    with db.get_conn() as conn:
+        rows = conn.execute(
+            f"""SELECT al.*, u.name as user_name
+                FROM activity_log al LEFT JOIN "user" u ON al.user_id = u.id
+                {where} ORDER BY al.created_at DESC""",
+            params,
+        ).fetchall()
+        log_activity(conn, user["id"], "export_csv", "activity_log", None,
+                     f"导出 {len(rows)} 条操作记录")
+
+    output = io.StringIO()
+    output.write('﻿')
+    writer = csv.writer(output)
+    writer.writerow(["时间", "操作人", "操作", "对象类型", "对象ID", "详情"])
+    for row in rows:
+        r = dict(row)
+        writer.writerow([
+            r["created_at"],
+            r.get("user_name", ""),
+            r["action"],
+            r.get("target_type", ""),
+            r.get("target_id", ""),
+            r.get("detail", ""),
+        ])
+    return Response(
+        output.getvalue().encode("utf-8"),
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=activity_log_export.csv"},
+    )
+
+
 # ---- API: 公开资产信息（扫码用）----
 
 @app.route("/api/public/asset/<int:asset_id>")
@@ -2341,6 +2413,23 @@ def api_employees_delete(emp_id):
     return jsonify({"ok": True, "employee": dict(updated), "moved_asset_ids": moved_asset_ids})
 
 
+@app.route("/api/employees/import/template")
+def api_employees_import_template():
+    user = require_role("admin")
+    if not user:
+        return jsonify({"error": "权限不足"}), 403
+    output = io.StringIO()
+    output.write('﻿')
+    writer = csv.writer(output)
+    writer.writerow(["name", "department", "notes"])
+    writer.writerow(["张三", "研发部", "示例员工"])
+    return Response(
+        output.getvalue().encode("utf-8"),
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=employee_import_template.csv"},
+    )
+
+
 @app.route("/api/employees/import", methods=["POST"])
 def api_employees_import():
     user = require_role("admin")
@@ -2611,10 +2700,42 @@ def api_users_delete(user_id):
     return jsonify({"ok": True})
 
 
+# ---- Health check ----
+
+@app.route("/api/health")
+def api_health():
+    try:
+        db = get_db()
+        with db.get_conn() as conn:
+            conn.execute("SELECT 1")
+        return jsonify({"status": "ok", "db": "connected"}), 200
+    except Exception as e:
+        logger.exception("Health check failed")
+        return jsonify({"status": "error", "db": "disconnected"}), 503
+
+
+# ---- Error handlers ----
+
+@app.errorhandler(404)
+def page_not_found(e):
+    return render_template("error.html", error_code=404,
+                           error_title="页面未找到",
+                           error_message="您访问的页面不存在，请检查地址是否正确。"), 404
+
+
+@app.errorhandler(500)
+def internal_error(e):
+    logger.exception("Internal server error")
+    return render_template("error.html", error_code=500,
+                           error_title="服务器错误",
+                           error_message="服务器处理请求时发生错误，请稍后重试。"), 500
+
+
 if __name__ == "__main__":
     db_existed = os.path.exists(DB_PATH)
     db = Database(DB_PATH)
     db.init_db()
     if db_existed:
         db.upgrade_db()
-    app.run(debug=True, host="0.0.0.0", port=5000)
+    debug = os.environ.get("FLASK_DEBUG", "").lower() in ("1", "true", "yes")
+    app.run(debug=debug, host="0.0.0.0", port=5000)
