@@ -721,7 +721,10 @@ class TestLabelAndQR:
                 root = os.path.dirname(os.path.dirname(__file__))
                 saved = os.path.join(root, logo.lstrip("/"))
                 if os.path.exists(saved):
-                    os.unlink(saved)
+                    try:
+                        os.unlink(saved)
+                    except PermissionError:
+                        pass
 
     def test_qr_nonexistent_asset(self, app_client, db):
         seed_test_data(db)
@@ -3070,6 +3073,4 @@ class TestActivityExport:
     def test_activity_export_requires_admin(self, app_client, db):
         """操作记录导出需要管理员权限"""
         seed_test_data(db)
-        login_employee(app_client)
-        res = app_client.get("/api/activity/export")
-        assert res.status_code == 403
+        login_employee(a

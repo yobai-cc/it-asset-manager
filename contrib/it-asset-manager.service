@@ -4,14 +4,15 @@ After=network.target
 
 [Service]
 Type=simple
-User=yobai
-Group=yobai
-WorkingDirectory=/home/yobai/it-asset-manager
-Environment="PATH=/home/yobai/it-asset-manager/.venv/bin"
+User=__APP_USER__
+Group=__APP_GROUP__
+WorkingDirectory=__APP_DIR__
+Environment="PATH=__APP_DIR__/.venv/bin"
 Environment="FLASK_DEBUG=0"
-ExecStart=/home/yobai/it-asset-manager/.venv/bin/gunicorn -c gunicorn.conf.py "server:app"
+Environment="SECRET_KEY=__CHANGE_ME__"
+ExecStart=__APP_DIR__/.venv/bin/gunicorn -c gunicorn.conf.py "server:app"
 Restart=always
 RestartSec=5
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=multi-user.targ
