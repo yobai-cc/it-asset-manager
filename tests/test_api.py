@@ -3073,4 +3073,6 @@ class TestActivityExport:
     def test_activity_export_requires_admin(self, app_client, db):
         """操作记录导出需要管理员权限"""
         seed_test_data(db)
-        login_employee(a
+        login_employee(app_client)
+        res = app_client.get("/api/activity/export")
+        assert res.status_code == 403
