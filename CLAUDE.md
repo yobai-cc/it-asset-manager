@@ -17,7 +17,7 @@ IT 固定资产管理追踪系统，面向 IT 管理员。
 
 - **技术栈**：Python Flask 3.1 + SQLite（原生 SQL）+ Jinja2 + 原生 JS + CSS
 - **无前端框架**：纯 vanilla JS，无构建步骤
-- **部署**：Flask 5000 端口 → Caddy 反向代理 9090 端口（10.18.0.68:9090）
+- **部署**：Flask 5000 端口 → Caddy 反向代理 9090 端口（your-server:9090）
 - **规模**：server.py ~2620 行，models.py ~476 行，202 个测试
 - **标签打印**：立象 Argox 热转印打印机 + 60×40mm 亚银纸，浏览器直接打印（Logo + 资产信息 + QR）
 
@@ -490,7 +490,7 @@ sudo systemctl enable --now it-asset-manager
 
 ```bash
 # Caddy 配置（/etc/caddy/Caddyfile）
-http://10.18.0.68:9090 {
+http://your-server:9090 {
     reverse_proxy 127.0.0.1:5000
 }
 

@@ -86,7 +86,7 @@ sudo systemctl status it-asset-manager
 ### Caddy 反向代理
 
 ```
-http://10.18.0.68:9090 {
+http://your-server:9090 {
     reverse_proxy 127.0.0.1:5000
 }
 ```
