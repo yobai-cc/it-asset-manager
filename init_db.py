@@ -15,16 +15,16 @@ def seed(db):
             conn.execute(f"DELETE FROM {table}")
         conn.executescript("DELETE FROM sqlite_sequence")
 
-        # 员工名单
+        # 员工名单（employee_id 与 user.employee_id 对应）
         employees = [
-            ("管理员", "IT部"),
-            ("张三", "研发部"),
-            ("李四", "市场部"),
-            ("王五", "财务部"),
+            ("admin", "管理员", "IT部"),
+            ("emp001", "张三", "研发部"),
+            ("emp002", "李四", "市场部"),
+            ("emp003", "王五", "财务部"),
         ]
         for emp in employees:
             conn.execute(
-                "INSERT INTO employee (name, department) VALUES (?, ?)",
+                "INSERT INTO employee (employee_id, name, department) VALUES (?, ?, ?)",
                 emp,
             )
 
@@ -162,6 +162,8 @@ def main():
     if db_existed:
         db.upgrade_db()
     seed(db)
+    # 确保 employee_id 已正确关联（幂等）
+    db.upgrade_db()
     print(f"数据库已初始化并填充种子数据: {db_path}")
 
 

@@ -145,9 +145,17 @@ fi
 
 info "依赖安装完成 ✓"
 
-# ---- 4. 初始化数据库 ----
+# ---- 4. 初始化/升级数据库 ----
 if [[ -f "it_asset.db" ]]; then
-    warn "数据库已存在，跳过初始化（如需重建，请先删除 it_asset.db）"
+    info "数据库已存在，执行升级检查..."
+    .venv/bin/python -c "
+import sys; sys.path.insert(0, '.')
+from models import Database
+db = Database('it_asset.db')
+db.upgrade_db()
+print('数据库升级完成')
+"
+    info "数据库升级完成 ✓"
 else
     info "初始化数据库..."
     .venv/bin/python init_db.py
