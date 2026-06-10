@@ -374,13 +374,13 @@ class TestAssetCRUD:
         assert res.status_code == 200
 
     def test_delete_asset_assigned_fails(self, app_client, db):
-        """不能删除已分配的资产"""
+        """非库存资产无原因删除失败"""
         seed_test_data(db)
         login_admin(app_client)
         create_res = app_client.post("/api/assets", json={"name": "Test PC", "category": "computer"})
         aid = create_res.get_json()["id"]
         app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
-        res = app_client.delete(f"/api/assets/{aid}")
+        res = app_client.delete(f"/api/assets/{aid}", json={})
         assert res.status_code == 400
 
     def test_create_asset_missing_field(self, app_client, db):
@@ -3076,3 +3076,525 @@ class TestActivityExport:
         login_employee(app_client)
         res = app_client.get("/api/activity/export")
         assert res.status_code == 403
+
+
+# ---- 软删除 / 回收站测试 ----
+
+class TestSoftDelete:
+    """单个资产软删除"""
+
+    def test_soft_delete_stock_asset(self, app_client, db):
+        """库存资产软删除成功"""
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={"name": "Test PC", "category": "computer"})
+        aid = res.get_json()["id"]
+        del_res = app_client.delete(f"/api/assets/{aid}")
+        assert del_res.status_code == 200
+        data = del_res.get_json()
+        assert data["deleted_at"] is not None
+        assert data["deleted_by"] is not None
+
+    def test_soft_delete_assigned_without_reason_fails(self, app_client, db):
+        """在用资产无原因删除失败"""
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={"name": "Test PC", "category": "computer"})
+        aid = res.get_json()["id"]
+        app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
+        del_res = app_client.delete(f"/api/assets/{aid}", json={})
+        assert del_res.status_code == 400
+
+    def test_soft_delete_assigned_with_reason(self, app_client, db):
+        """在用资产有原因可删除"""
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={"name": "Test PC", "category": "computer"})
+        aid = res.get_json()["id"]
+        app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
+        del_res = app_client.delete(f"/api/assets/{aid}", json={"reason": "报废"})
+        assert del_res.status_code == 200
+        assert del_res.get_json()["deleted_at"] is not None
+
+    def test_soft_delete_sets_snapshot(self, app_client, db):
+        """删除时保存快照"""
+        import json
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={"name": "Test PC", "category": "computer"})
+        aid = res.get_json()["id"]
+        app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
+        del_res = app_client.delete(f"/api/assets/{aid}", json={"reason": "测试"})
+        data = del_res.get_json()
+        assert data["delete_reason"] == "测试"
+        snapshot = json.loads(data["delete_snapshot"])
+        assert snapshot["status"] == "assigned"
+        assert snapshot["name"] == "Test PC"
+
+
+class TestRecycleBinList:
+    """回收站列表与权限"""
+
+    def _soft_delete_one(self, client):
+        res = client.post("/api/assets", json={"name": "To Delete", "category": "computer"})
+        aid = res.get_json()["id"]
+        client.delete(f"/api/assets/{aid}")
+        return aid
+
+    def test_deleted_only_requires_admin(self, app_client, db):
+        """deleted_only=true 需要 admin 权限"""
+        seed_test_data(db)
+        login_admin(app_client)
+        self._soft_delete_one(app_client)
+        login_employee(app_client)
+        res = app_client.get("/api/assets?deleted_only=true")
+        assert res.status_code == 403
+
+    def test_deleted_only_returns_deleted(self, app_client, db):
+        """回收站只返回已删除资产"""
+        seed_test_data(db)
+        login_admin(app_client)
+        app_client.post("/api/assets", json={"name": "Active", "category": "computer"})
+        self._soft_delete_one(app_client)
+        res = app_client.get("/api/assets?deleted_only=true")
+        assert res.status_code == 200
+        assets = res.get_json()["assets"]
+        assert len(assets) == 1
+        assert assets[0]["deleted_at"] is not None
+
+    def test_normal_list_excludes_deleted(self, app_client, db):
+        """正常列表不含已删除资产"""
+        seed_test_data(db)
+        login_admin(app_client)
+        app_client.post("/api/assets", json={"name": "Active", "category": "computer"})
+        self._soft_delete_one(app_client)
+        res = app_client.get("/api/assets")
+        assets = res.get_json()["assets"]
+        assert all(a["deleted_at"] is None for a in assets)
+
+    def test_asset_detail_deleted_hidden_from_employee(self, app_client, db):
+        """员工访问已删除资产详情返回 404"""
+        seed_test_data(db)
+        login_admin(app_client)
+        aid = self._soft_delete_one(app_client)
+        login_employee(app_client)
+        res = app_client.get(f"/api/assets/{aid}")
+        assert res.status_code == 404
+
+    def test_asset_detail_deleted_visible_to_admin(self, app_client, db):
+        """管理员可以查看已删除资产详情"""
+        seed_test_data(db)
+        login_admin(app_client)
+        aid = self._soft_delete_one(app_client)
+        res = app_client.get(f"/api/assets/{aid}")
+        assert res.status_code == 200
+        assert res.get_json()["deleted_at"] is not None
+
+
+class TestRestore:
+    """恢复已删除资产"""
+
+    def _soft_delete(self, client):
+        res = client.post("/api/assets", json={"name": "To Restore", "category": "computer"})
+        aid = res.get_json()["id"]
+        client.delete(f"/api/assets/{aid}")
+        return aid
+
+    def test_restore_deleted_asset(self, app_client, db):
+        """恢复成功，deleted 字段清空"""
+        seed_test_data(db)
+        login_admin(app_client)
+        aid = self._soft_delete(app_client)
+        res = app_client.post(f"/api/assets/{aid}/restore")
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data["deleted_at"] is None
+        assert data["deleted_by"] is None
+
+    def test_restore_visible_in_normal_list(self, app_client, db):
+        """恢复后出现在正常列表"""
+        seed_test_data(db)
+        login_admin(app_client)
+        aid = self._soft_delete(app_client)
+        app_client.post(f"/api/assets/{aid}/restore")
+        res = app_client.get("/api/assets")
+        ids = [a["id"] for a in res.get_json()["assets"]]
+        assert aid in ids
+
+    def test_restore_non_deleted_fails(self, app_client, db):
+        """恢复未删除资产失败"""
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={"name": "Active", "category": "computer"})
+        aid = res.get_json()["id"]
+        res = app_client.post(f"/api/assets/{aid}/restore")
+        assert res.status_code == 400
+
+    def test_restore_requires_admin(self, app_client, db):
+        """恢复需要管理员权限"""
+        seed_test_data(db)
+        login_admin(app_client)
+        aid = self._soft_delete(app_client)
+        login_employee(app_client)
+        res = app_client.post(f"/api/assets/{aid}/restore")
+        assert res.status_code == 403
+
+
+class TestPurge:
+    """永久删除"""
+
+    def _soft_delete(self, client):
+        res = client.post("/api/assets", json={"name": "To Purge", "category": "computer"})
+        aid = res.get_json()["id"]
+        client.delete(f"/api/assets/{aid}")
+        return aid
+
+    def test_purge_requires_confirm(self, app_client, db):
+        """永久删除需要 confirm=DELETE"""
+        seed_test_data(db)
+        login_admin(app_client)
+        aid = self._soft_delete(app_client)
+        res = app_client.delete(f"/api/assets/{aid}/purge", json={"confirm": "wrong"})
+        assert res.status_code == 400
+
+    def test_purge_deleted_asset(self, app_client, db):
+        """永久删除回收站资产成功"""
+        seed_test_data(db)
+        login_admin(app_client)
+        aid = self._soft_delete(app_client)
+        res = app_client.delete(f"/api/assets/{aid}/purge", json={"confirm": "DELETE"})
+        assert res.status_code == 200
+        res2 = app_client.get(f"/api/assets/{aid}")
+        assert res2.status_code == 404
+
+    def test_purge_non_deleted_fails(self, app_client, db):
+        """永久删除未删除资产失败"""
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={"name": "Active", "category": "computer"})
+        aid = res.get_json()["id"]
+        res = app_client.delete(f"/api/assets/{aid}/purge", json={"confirm": "DELETE"})
+        assert res.status_code == 400
+
+    def test_purge_printer_with_consumable(self, app_client, db):
+        """永久删除打印机不影响耗材记录"""
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={
+            "name": "Printer", "category": "printer", "printer_type": "mono"
+        })
+        aid = res.get_json()["id"]
+        app_client.post("/api/consumables", json={
+            "name": "Black Toner", "type": "toner", "stock": 5,
+            "asset_id": aid, "color": "black", "model": "原装"
+        })
+        app_client.delete(f"/api/assets/{aid}")
+        res = app_client.delete(f"/api/assets/{aid}/purge", json={"confirm": "DELETE"})
+        assert res.status_code == 200
+        # 耗材仍在，但 asset_id 为空
+        con_res = app_client.get("/api/consumables")
+        cons = con_res.get_json()["consumables"]
+        assert len(cons) >= 1
+        assert cons[0]["asset_id"] is None
+
+    def test_purge_removes_lifecycle(self, app_client, db):
+        """永久删除同时删除生命周期事件"""
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={"name": "PC", "category": "computer"})
+        aid = res.get_json()["id"]
+        app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
+        app_client.delete(f"/api/assets/{aid}", json={"reason": "清理"})
+        app_client.delete(f"/api/assets/{aid}/purge", json={"confirm": "DELETE"})
+        # 资产和事件都应不存在
+        with db.get_conn() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM asset WHERE id = ?", (aid,)).fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM lifecycle_event WHERE asset_id = ?", (aid,)).fetchone()[0] == 0
+
+
+class TestBatchSoftDelete:
+    """批量软删除"""
+
+    def test_batch_delete_stock_assets(self, app_client, db):
+        """批量删除库存资产"""
+        seed_test_data(db)
+        login_admin(app_client)
+        ids = []
+        for i in range(3):
+            res = app_client.post("/api/assets", json={"name": f"PC {i}", "category": "computer"})
+            ids.append(res.get_json()["id"])
+        res = app_client.post("/api/assets/batch-delete", json={"ids": ids})
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data["deleted"] == 3
+        assert data["skipped"] == []
+
+    def test_batch_delete_mixed_skips_non_stock(self, app_client, db):
+        """批量删除跳过在用资产（无原因时）"""
+        seed_test_data(db)
+        login_admin(app_client)
+        stock_res = app_client.post("/api/assets", json={"name": "Stock", "category": "computer"})
+        assigned_res = app_client.post("/api/assets", json={"name": "Assigned", "category": "computer"})
+        stock_id = stock_res.get_json()["id"]
+        assigned_id = assigned_res.get_json()["id"]
+        app_client.post(f"/api/assets/{assigned_id}/assign", json={"target_employee_id": 2})
+        res = app_client.post("/api/assets/batch-delete", json={"ids": [stock_id, assigned_id]})
+        data = res.get_json()
+        assert data["deleted"] == 1
+        assert len(data["skipped"]) == 1
+
+    def test_batch_delete_with_reason_deletes_all(self, app_client, db):
+        """批量删除带原因可删除在用资产"""
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={"name": "PC", "category": "computer"})
+        aid = res.get_json()["id"]
+        app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
+        res = app_client.post("/api/assets/batch-delete", json={"ids": [aid], "reason": "批量清理"})
+        data = res.get_json()
+        assert data["deleted"] == 1
+
+
+class TestBatchRestore:
+    """批量恢复"""
+
+    def test_batch_restore(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        ids = []
+        for i in range(3):
+            res = app_client.post("/api/assets", json={"name": f"PC {i}", "category": "computer"})
+            ids.append(res.get_json()["id"])
+        app_client.post("/api/assets/batch-delete", json={"ids": ids})
+        res = app_client.post("/api/assets/batch-restore", json={"ids": ids})
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data["restored"] == 3
+
+
+class TestBatchPurge:
+    """批量永久删除"""
+
+    def test_batch_purge(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        ids = []
+        for i in range(2):
+            res = app_client.post("/api/assets", json={"name": f"PC {i}", "category": "computer"})
+            ids.append(res.get_json()["id"])
+        app_client.post("/api/assets/batch-delete", json={"ids": ids})
+        res = app_client.post("/api/assets/batch-purge", json={"ids": ids, "confirm": "DELETE"})
+        assert res.status_code == 200
+        assert res.get_json()["purged"] == 2
+
+    def test_batch_purge_requires_confirm(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets/batch-purge", json={"ids": [1]})
+        assert res.status_code == 400
+
+
+class TestBatchIdValidation:
+    """批量接口 ID 校验"""
+
+    def test_reject_empty_ids(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets/batch-delete", json={"ids": []})
+        assert res.status_code == 400
+
+    def test_reject_non_int_ids(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets/batch-delete", json={"ids": ["abc"]})
+        assert res.status_code == 400
+
+    def test_reject_zero_id(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets/batch-delete", json={"ids": [0]})
+        assert res.status_code == 400
+
+    def test_reject_negative_id(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets/batch-delete", json={"ids": [-1]})
+        assert res.status_code == 400
+
+    def test_reject_duplicate_ids(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets/batch-delete", json={"ids": [1, 1]})
+        assert res.status_code == 400
+
+    def test_reject_boolean_id(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets/batch-delete", json={"ids": [True]})
+        assert res.status_code == 400
+
+
+class TestDeletedAssetBoundary:
+    """已删除资产的边界保护"""
+
+    def _delete_asset(self, client):
+        res = client.post("/api/assets", json={"name": "PC", "category": "computer"})
+        aid = res.get_json()["id"]
+        client.delete(f"/api/assets/{aid}")
+        return aid
+
+    def test_cannot_edit_deleted(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        aid = self._delete_asset(app_client)
+        res = app_client.put(f"/api/assets/{aid}", json={"name": "Hacked"})
+        assert res.status_code == 400
+
+    def test_cannot_assign_deleted(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        aid = self._delete_asset(app_client)
+        res = app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
+        assert res.status_code == 400
+
+    def test_cannot_return_deleted(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        aid = self._delete_asset(app_client)
+        res = app_client.post(f"/api/assets/{aid}/return", json={})
+        assert res.status_code == 400
+
+    def test_cannot_maintain_deleted(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        aid = self._delete_asset(app_client)
+        res = app_client.post(f"/api/assets/{aid}/maintenance", json={"description": "test"})
+        assert res.status_code == 400
+
+    def test_cannot_batch_label_deleted(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        aid = self._delete_asset(app_client)
+        res = app_client.post("/api/batch-labels", json={"asset_ids": [aid]})
+        assert res.status_code == 400
+
+    def test_public_scan_hides_deleted(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        aid = self._delete_asset(app_client)
+        res = app_client.get(f"/api/public/asset/{aid}")
+        assert res.status_code == 404
+
+    def test_qr_returns_404_for_deleted(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        aid = self._delete_asset(app_client)
+        res = app_client.get(f"/api/assets/{aid}/qr")
+        assert res.status_code == 404
+
+
+class TestDeletedFiltering:
+    """已删除资产被业务查询排除"""
+
+    def test_stats_exclude_deleted(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        app_client.post("/api/assets", json={"name": "Active", "category": "computer"})
+        res = app_client.post("/api/assets", json={"name": "ToDelete", "category": "monitor"})
+        aid = res.get_json()["id"]
+        app_client.delete(f"/api/assets/{aid}")
+        stats = app_client.get("/api/stats").get_json()
+        assert stats["total"] == 1  # only the Active asset remains
+
+    def test_my_assets_exclude_deleted(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={"name": "My PC", "category": "computer"})
+        aid = res.get_json()["id"]
+        app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
+        app_client.delete(f"/api/assets/{aid}", json={"reason": "清理"})
+        login_employee(app_client)
+        res = app_client.get("/api/my/assets")
+        assets = res.get_json()["assets"]
+        ids = [a["id"] for a in assets]
+        assert aid not in ids
+
+    def test_export_excludes_deleted(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        app_client.post("/api/assets", json={"name": "Active", "category": "computer"})
+        res = app_client.post("/api/assets", json={"name": "Deleted", "category": "computer"})
+        aid = res.get_json()["id"]
+        app_client.delete(f"/api/assets/{aid}")
+        res = app_client.get("/api/assets/export")
+        assert res.status_code == 200
+        text = res.data.decode("utf-8-sig")
+        assert "Deleted" not in text
+        assert "Active" in text
+
+    def test_employee_list_asset_count_excludes_deleted(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={"name": "PC", "category": "computer"})
+        aid = res.get_json()["id"]
+        app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
+        app_client.delete(f"/api/assets/{aid}", json={"reason": "清理"})
+        res = app_client.get("/api/employees")
+        emps = res.get_json()["employees"]
+        zhang = [e for e in emps if e["name"] == "张三"][0]
+        assert zhang["asset_count"] == 0
+
+
+class TestChangePassword:
+    """修改密码"""
+
+    def test_change_password_success(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/change-password", json={
+            "old_password": "admin123",
+            "new_password": "newpass123"
+        })
+        assert res.status_code == 200
+        # 旧密码不能登录
+        app_client.post("/api/logout")
+        res = app_client.post("/api/login", json={"employee_id": "admin", "password": "admin123"})
+        assert res.status_code == 401
+        # 新密码可以
+        res = app_client.post("/api/login", json={"employee_id": "admin", "password": "newpass123"})
+        assert res.status_code == 200
+
+    def test_change_password_wrong_old(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/change-password", json={
+            "old_password": "wrong",
+            "new_password": "newpass123"
+        })
+        assert res.status_code == 400
+
+    def test_change_password_empty_new(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/change-password", json={
+            "old_password": "admin123",
+            "new_password": ""
+        })
+        assert res.status_code == 400
+
+    def test_change_password_requires_login(self, app_client, db):
+        seed_test_data(db)
+        res = app_client.post("/api/change-password", json={
+            "old_password": "admin123",
+            "new_password": "newpass123"
+        })
+        assert res.status_code == 401
+
+    def test_employee_can_change_own_password(self, app_client, db):
+        seed_test_data(db)
+        login_employee(app_client)
+        res = app_client.post("/api/change-password", json={
+            "old_password": "emp001",
+            "new_password": "emp001new"
+        })
+        assert res.status_code == 200

@@ -36,6 +36,7 @@
                     <a href="/scan" class="icon-button" aria-label="扫码" title="扫码"><span class="icon-scan"></span></a>
                     <span class="icon-button" aria-hidden="true"><span class="icon-notice"></span></span>
                     <span class="user-avatar" title="{{ user.name }}">{{ user.name[:1] }}</span>
+                    <button type="button" class="icon-button" data-change-pwd aria-label="修改密码" title="修改密码"><span class="icon-set"></span></button>
                     <button type="button" class="icon-button" data-logout aria-label="退出" title="退出"><span class="icon-logout"></span></button>
                 </div>
             </header>
@@ -51,6 +52,7 @@
                 <a href="/my/applications">我的申请</a>
                 <a href="/my/applications/new">提交申请</a>
                 <span class="nav-user">{{ user.name }}</span>
+                <button type="button" class="btn btn-secondary btn-sm" data-change-pwd>修改密码</button>
                 <button type="button" class="btn btn-secondary btn-sm" data-logout>退出</button>
             </div>
             <button class="nav-toggle" type="button" data-nav-toggle aria-label="切换菜单">☰</button>
@@ -69,6 +71,30 @@
     </div>
     {% else %}
         </main>
+    </div>
+    {% endif %}
+
+    {% if user %}
+    <div class="modal" id="changePwdModal" style="display:none;">
+        <div class="modal-content" style="max-width:400px;">
+            <h3>修改密码 <button type="button" style="float:right;border:none;background:none;font-size:1.4rem;cursor:pointer;line-height:1;" data-modal-close>&times;</button></h3>
+            <div class="form-group">
+                <label>旧密码</label>
+                <input type="password" id="pwdOld" class="form-input" autocomplete="current-password">
+            </div>
+            <div class="form-group">
+                <label>新密码</label>
+                <input type="password" id="pwdNew" class="form-input" autocomplete="new-password">
+            </div>
+            <div class="form-group">
+                <label>确认新密码</label>
+                <input type="password" id="pwdConfirm" class="form-input" autocomplete="new-password">
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">
+                <button type="button" class="btn btn-secondary" data-modal-close>取消</button>
+                <button type="button" class="btn btn-primary" id="pwdSubmitBtn">确认修改</button>
+            </div>
+        </div>
     </div>
     {% endif %}
 
@@ -229,21 +255,31 @@
         banner.textContent = drawerCatEmojis[asset.category] || '\u{1F4E6}';
 
         const tools = makeEl('div', 'drawer-tools');
-        const edit = makeEl('a', 'btn btn-tool', '编辑');
-        edit.href = `/assets/${asset.id}/edit`;
-        const action = makeEl('a', 'btn btn-tool btn-primary', asset.status === 'in_stock' ? '领用' : '操作');
-        action.href = `/assets/${asset.id}`;
-        const lbl = makeEl('a', 'btn btn-tool', '标签');
-        lbl.href = `/assets/${asset.id}/label`;
-        lbl.target = '_blank';
-        const del = makeEl('button', 'btn btn-tool', '删除');
-        del.type = 'button';
-        del.dataset.drawerDelete = asset.id;
-        del.disabled = asset.status !== 'in_stock';
-        del.style.color = 'var(--color-danger)';
-        del.style.borderColor = 'var(--color-danger)';
-        if (del.disabled) { del.style.opacity = '0.4'; del.style.cursor = 'not-allowed'; }
-        tools.append(edit, action, lbl, del);
+        if (asset.deleted_at) {
+            const restoreBtn = makeEl('button', 'btn btn-tool btn-primary', '恢复');
+            restoreBtn.type = 'button';
+            restoreBtn.dataset.drawerRestore = asset.id;
+            const purgeBtn = makeEl('button', 'btn btn-tool', '永久删除');
+            purgeBtn.type = 'button';
+            purgeBtn.dataset.drawerPurge = asset.id;
+            purgeBtn.style.color = 'var(--color-danger)';
+            purgeBtn.style.borderColor = 'var(--color-danger)';
+            tools.append(restoreBtn, purgeBtn);
+        } else {
+            const edit = makeEl('a', 'btn btn-tool', '编辑');
+            edit.href = `/assets/${asset.id}/edit`;
+            const action = makeEl('a', 'btn btn-tool btn-primary', asset.status === 'in_stock' ? '领用' : '操作');
+            action.href = `/assets/${asset.id}`;
+            const lbl = makeEl('a', 'btn btn-tool', '标签');
+            lbl.href = `/assets/${asset.id}/label`;
+            lbl.target = '_blank';
+            const del = makeEl('button', 'btn btn-tool', '删除');
+            del.type = 'button';
+            del.dataset.drawerDelete = asset.id;
+            del.style.color = 'var(--color-danger)';
+            del.style.borderColor = 'var(--color-danger)';
+            tools.append(edit, action, lbl, del);
+        }
 
         const infoTitle = makeEl('h3', 'drawer-section-title', '基本属性');
         const metaGrid = makeEl('div', 'info-mini-grid');
@@ -285,7 +321,51 @@
             }).catch(() => {});
         }
 
-        body.append(header, banner, tools, infoTitle, metaGrid, tlTitle, timeline, labelTitle, labelBox);
+        body.append(header, banner, tools, infoTitle, metaGrid);
+
+        if (asset.deleted_at) {
+            const delTitle = makeEl('h3', 'drawer-section-title', '删除信息');
+            delTitle.style.marginTop = '16px';
+            const delGrid = makeEl('div', 'info-mini-grid');
+            appendMiniCard(delGrid, '删除时间', asset.deleted_at ? new Date(asset.deleted_at).toLocaleString('zh-CN') : '-');
+            appendMiniCard(delGrid, '删除原因', asset.delete_reason || '无');
+            let snapshotInfo = '-';
+            if (asset.delete_snapshot) {
+                try {
+                    const snap = JSON.parse(asset.delete_snapshot);
+                    snapshotInfo = `状态: ${drawerStatusLabels[snap.status] || snap.status}` + (snap.location ? `，位置: ${snap.location}` : '');
+                } catch {}
+            }
+            appendMiniCard(delGrid, '删除前快照', snapshotInfo);
+            body.append(delTitle, delGrid);
+        }
+
+        body.append(tlTitle, timeline);
+
+        if (!asset.deleted_at) {
+            const labelTitle = makeEl('h3', 'drawer-section-title', '标签预览 (60×40mm)');
+            labelTitle.style.marginTop = '24px';
+            const labelBox = makeEl('div', 'label-preview-box');
+            const logoValue = window.__assetLabelLogo || '';
+            const labelFields = window.__assetLabelFields || ['name', 'serial_number'];
+            if (logoValue) {
+                labelBox.appendChild(createPhysicalLabel(asset, `/api/assets/${asset.id}/qr`, {compact: true, logoUrl: logoValue, fields: labelFields}));
+            } else {
+                labelBox.appendChild(createPhysicalLabel(asset, `/api/assets/${asset.id}/qr`, {compact: true, fields: labelFields}));
+                apiFetch('/api/settings/logo').then(logoData => {
+                    window.__assetLabelLogo = logoData.logo || '';
+                    if (window.__assetLabelLogo) renderDrawerContent(asset);
+                }).catch(() => {});
+            }
+            if (!window.__assetLabelFields) {
+                apiFetch('/api/settings/label').then(labelData => {
+                    window.__assetLabelFields = labelData.fields || ['name', 'serial_number'];
+                    renderDrawerContent(asset);
+                }).catch(() => {});
+            }
+            body.append(labelTitle, labelBox);
+        }
+
         drawer.replaceChildren(body);
     }
 
@@ -318,19 +398,90 @@
             location.href = '/login';
             return;
         }
+        const changePwd = event.target.closest('[data-change-pwd]');
+        if (changePwd) {
+            const m = document.getElementById('changePwdModal');
+            if (m) { m.style.display = 'flex'; document.getElementById('pwdOld').focus(); }
+            return;
+        }
+        const modalClose = event.target.closest('[data-modal-close]');
+        if (modalClose) {
+            const m = modalClose.closest('.modal');
+            if (m) m.style.display = 'none';
+            return;
+        }
         if (event.target.closest('[data-drawer-close]')) {
             closeAssetDetailDrawer();
             return;
         }
         const deleteButton = event.target.closest('[data-drawer-delete]');
-        if (deleteButton && !deleteButton.disabled) {
+        if (deleteButton) {
             const id = deleteButton.dataset.drawerDelete;
-            if (!confirm('确定删除这项库存资产吗？')) return;
-            await apiFetch(`/api/assets/${id}`, {method: 'DELETE'});
-            closeAssetDetailDrawer();
-            document.dispatchEvent(new CustomEvent('asset:changed'));
+            const reason = prompt('移入回收站原因（可选，直接确定跳过）：');
+            if (reason === null) return;
+            try {
+                await apiFetch(`/api/assets/${id}`, {method: 'DELETE', body: JSON.stringify({reason})});
+                closeAssetDetailDrawer();
+                document.dispatchEvent(new CustomEvent('asset:changed'));
+            } catch (err) {
+                if (err.message && !err.message.includes('操作失败')) alert(err.message);
+            }
+            return;
+        }
+        const restoreButton = event.target.closest('[data-drawer-restore]');
+        if (restoreButton) {
+            const id = restoreButton.dataset.drawerRestore;
+            try {
+                await apiFetch(`/api/assets/${id}/restore`, {method: 'POST'});
+                alert('资产已恢复');
+                closeAssetDetailDrawer();
+                document.dispatchEvent(new CustomEvent('asset:changed'));
+            } catch (err) {
+                if (err.message && !err.message.includes('操作失败')) alert(err.message);
+            }
+            return;
+        }
+        const purgeButton = event.target.closest('[data-drawer-purge]');
+        if (purgeButton) {
+            const id = purgeButton.dataset.drawerPurge;
+            const input = prompt('永久删除不可逆，请输入 DELETE 以确认：');
+            if (input !== 'DELETE') { if (input !== null) alert('输入不正确，已取消'); return; }
+            try {
+                await apiFetch(`/api/assets/${id}/purge`, {method: 'DELETE', body: JSON.stringify({confirm: 'DELETE'})});
+                alert('资产已永久删除');
+                closeAssetDetailDrawer();
+                document.dispatchEvent(new CustomEvent('asset:changed'));
+            } catch (err) {
+                if (err.message && !err.message.includes('操作失败')) alert(err.message);
+            }
+            return;
         }
     });
+
+    const pwdSubmitBtn = document.getElementById('pwdSubmitBtn');
+    if (pwdSubmitBtn) {
+        pwdSubmitBtn.addEventListener('click', async () => {
+            const old = document.getElementById('pwdOld').value;
+            const nw = document.getElementById('pwdNew').value;
+            const cf = document.getElementById('pwdConfirm').value;
+            if (!old || !nw) { alert('请填写旧密码和新密码'); return; }
+            if (nw !== cf) { alert('两次输入的新密码不一致'); return; }
+            try {
+                await apiFetch('/api/change-password', {
+                    method: 'POST',
+                    body: JSON.stringify({old_password: old, new_password: nw})
+                });
+                alert('密码修改成功');
+                document.getElementById('changePwdModal').style.display = 'none';
+                document.getElementById('pwdOld').value = '';
+                document.getElementById('pwdNew').value = '';
+                document.getElementById('pwdConfirm').value = '';
+            } catch (err) {
+                /* apiFetch already alerts JSON errors; catch network/parse failures */
+                if (err.message && !err.message.includes('操作失败')) alert(err.message);
+            }
+        });
+    }
     </script>
     {% block scripts %}{% endblock %}
 </body>

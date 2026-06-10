@@ -3,10 +3,10 @@
 {% block content %}
 <div class="page-header">
     <div>
-        <h1 class="page-title">资产台账</h1>
-        <p class="page-subtitle">管理所有固定资产，点击行查看详情</p>
+        <h1 class="page-title" id="pageTitle">资产台账</h1>
+        <p class="page-subtitle" id="pageSubtitle">管理所有固定资产，点击行查看详情</p>
     </div>
-    <div class="page-actions">
+    <div class="page-actions" id="pageActions">
         <button class="btn btn-secondary" type="button" onclick="showImportModal()">批量导入</button>
         <button class="btn btn-secondary" type="button" onclick="exportCSV()">导出CSV</button>
         <a href="/assets/new" class="btn btn-primary">新增资产</a>
@@ -21,6 +21,7 @@
             <button type="button" class="tab-btn" data-status="in_stock">库存</button>
             <button type="button" class="tab-btn" data-status="maintenance">维修中</button>
             <button type="button" class="tab-btn" data-status="scrapped">已报废</button>
+            <button type="button" class="tab-btn" data-status="recycle">回收站</button>
         </div>
         <select id="categoryFilter" class="category-select">
             <option value="">类别: 全部</option>
@@ -39,7 +40,12 @@
 
 <div class="batch-bar" id="batchBar" style="display:none;">
     <span class="batch-info" id="batchHint">请先勾选资产</span>
-    <button class="btn-batch-action" type="button" onclick="batchPrintLabels()" id="batchLabelBtn" disabled>批量打印标签</button>
+    <div style="display:flex;gap:8px;" id="batchActions">
+        <button class="btn-batch-action" type="button" onclick="batchPrintLabels()" id="batchLabelBtn" disabled>批量打印标签</button>
+        <button class="btn-batch-action btn-batch-danger" type="button" onclick="batchDeleteAssets()" id="batchDeleteBtn" disabled>移入回收站</button>
+        <button class="btn-batch-action" type="button" onclick="batchRestoreAssets()" id="batchRestoreBtn" disabled style="display:none;">恢复</button>
+        <button class="btn-batch-action btn-batch-danger" type="button" onclick="batchPurgeAssets()" id="batchPurgeBtn" disabled style="display:none;">永久删除</button>
+    </div>
 </div>
 
 <div class="table-shell">
@@ -94,12 +100,45 @@
         </div>
     </div>
 </div>
+
+<div id="deleteReasonModal" class="modal" style="display:none;">
+    <div class="modal-content" style="max-width:420px;">
+        <h3>移入回收站</h3>
+        <p class="text-muted" style="margin-bottom:var(--space-2);">资产会从台账隐藏，但历史记录保留，可在回收站恢复。</p>
+        <div class="form-group">
+            <label>删除原因<span id="reasonRequired" style="color:var(--color-danger);display:none;">（必填）</span></label>
+            <textarea id="deleteReasonInput" class="form-input" rows="2" placeholder="可选填写删除原因..."></textarea>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">
+            <button class="btn btn-secondary" type="button" onclick="cancelBatchDelete()">取消</button>
+            <button class="btn btn-primary" type="button" id="confirmDeleteBtn" onclick="confirmBatchDelete()">确定</button>
+        </div>
+    </div>
+</div>
+
+<div id="purgeConfirmModal" class="modal" style="display:none;">
+    <div class="modal-content" style="max-width:420px;">
+        <h3 style="color:var(--color-danger);">永久删除确认</h3>
+        <p class="text-muted" style="margin-bottom:var(--space-2);">此操作不可逆，资产及所有关联历史将被永久删除。</p>
+        <div class="form-group">
+            <label>请输入 <strong>DELETE</strong> 以确认</label>
+            <input type="text" id="purgeConfirmInput" class="form-input" placeholder="DELETE">
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">
+            <button class="btn btn-secondary" type="button" onclick="cancelPurge()">取消</button>
+            <button class="btn btn-primary" style="background:var(--color-danger);" type="button" id="confirmPurgeBtn" onclick="confirmPurge()">永久删除</button>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
 <script>
 let currentPage = 1;
 let currentStatus = '';
+let isRecycleMode = false;
+let pendingDeleteIds = [];
+let pendingPurgeIds = null; // null = single, array = batch
 const statusLabels = {in_stock:'库存',assigned:'在用',maintenance:'维修中',scrapped:'已报废'};
 const catLabels = {computer:'电脑',monitor:'显示器',phone:'手机',tablet:'平板',printer:'打印机',server:'服务器',network:'网络设备',firewall:'防火墙',switch:'交换机'};
 const catColors = {computer:'#2563eb',monitor:'#7c3aed',phone:'#059669',tablet:'#d97706',printer:'#ef4444',server:'#475569',network:'#0891b2',firewall:'#be185d',switch:'#65a30d'};
@@ -114,16 +153,38 @@ function appendTextCell(row, text) {
     return td;
 }
 
-function createButtonLink(href, label, className) {
-    const link = document.createElement('a');
-    link.href = href;
-    link.className = className || 'btn btn-sm btn-secondary';
-    link.textContent = label;
-    return link;
-}
-
 function getInitialSearch() {
     return new URLSearchParams(window.location.search).get('search') || '';
+}
+
+function updateUIForMode() {
+    isRecycleMode = currentStatus === 'recycle';
+    const pageTitle = document.getElementById('pageTitle');
+    const pageSubtitle = document.getElementById('pageSubtitle');
+    const pageActions = document.getElementById('pageActions');
+    const batchLabelBtn = document.getElementById('batchLabelBtn');
+    const batchDeleteBtn = document.getElementById('batchDeleteBtn');
+    const batchRestoreBtn = document.getElementById('batchRestoreBtn');
+    const batchPurgeBtn = document.getElementById('batchPurgeBtn');
+
+    if (isRecycleMode) {
+        pageTitle.textContent = '回收站';
+        pageSubtitle.textContent = '已删除的资产可以恢复或永久删除';
+        pageActions.style.display = 'none';
+        batchLabelBtn.style.display = 'none';
+        batchDeleteBtn.style.display = 'none';
+        batchRestoreBtn.style.display = '';
+        batchPurgeBtn.style.display = '';
+    } else {
+        pageTitle.textContent = '资产台账';
+        pageSubtitle.textContent = '管理所有固定资产，点击行查看详情';
+        pageActions.style.display = '';
+        batchLabelBtn.style.display = '';
+        batchDeleteBtn.style.display = '';
+        batchRestoreBtn.style.display = 'none';
+        batchPurgeBtn.style.display = 'none';
+    }
+    updateBatchBar();
 }
 
 async function loadAssets(page = 1) {
@@ -133,7 +194,11 @@ async function loadAssets(page = 1) {
     let url = `/api/assets?page=${page}&limit=15`;
     if (search) url += `&search=${encodeURIComponent(search)}`;
     if (category) url += `&category=${encodeURIComponent(category)}`;
-    if (currentStatus) url += `&status=${encodeURIComponent(currentStatus)}`;
+    if (isRecycleMode) {
+        url += '&deleted_only=true';
+    } else {
+        if (currentStatus) url += `&status=${encodeURIComponent(currentStatus)}`;
+    }
     const data = await apiFetch(url);
     const tbody = document.getElementById('asset-table-body');
     tbody.replaceChildren();
@@ -179,29 +244,56 @@ async function loadAssets(page = 1) {
         catTd.appendChild(cat);
         row.appendChild(catTd);
 
-        const statusTd = document.createElement('td');
-        const badge = document.createElement('span');
-        badge.className = `status-badge ${statusClasses[asset.status] || ''}`.trim();
-        badge.textContent = statusLabels[asset.status] || asset.status;
-        statusTd.appendChild(badge);
-        row.appendChild(statusTd);
+        if (isRecycleMode && asset.deleted_at) {
+            const statusTd = document.createElement('td');
+            const badge = document.createElement('span');
+            badge.className = 'status-badge badge-scrapped';
+            badge.textContent = '已删除';
+            statusTd.appendChild(badge);
+            row.appendChild(statusTd);
 
-        appendTextCell(row, asset.holder_name);
-        appendTextCell(row, asset.location);
+            appendTextCell(row, asset.holder_name);
+            const locTd = appendTextCell(row, asset.location);
+            locTd.title = asset.delete_reason ? ('原因: ' + asset.delete_reason) : '';
 
-        const actionTd = document.createElement('td');
-        const detailLink = document.createElement('a');
-        detailLink.href = `/assets/${asset.id}`;
-        detailLink.className = 'opt-link';
-        detailLink.textContent = '详情';
-        actionTd.appendChild(detailLink);
-        const labelLink = document.createElement('a');
-        labelLink.href = `/assets/${asset.id}/label`;
-        labelLink.className = 'opt-link';
-        labelLink.target = '_blank';
-        labelLink.textContent = '标签';
-        actionTd.appendChild(labelLink);
-        row.appendChild(actionTd);
+            const actionTd = document.createElement('td');
+            const restoreBtn = document.createElement('button');
+            restoreBtn.className = 'opt-link';
+            restoreBtn.textContent = '恢复';
+            restoreBtn.onclick = () => restoreAsset(asset.id);
+            actionTd.appendChild(restoreBtn);
+            const purgeBtn = document.createElement('button');
+            purgeBtn.className = 'opt-link';
+            purgeBtn.style.color = 'var(--color-danger)';
+            purgeBtn.textContent = '永久删除';
+            purgeBtn.onclick = () => showPurgeConfirm(asset.id);
+            actionTd.appendChild(purgeBtn);
+            row.appendChild(actionTd);
+        } else {
+            const statusTd = document.createElement('td');
+            const badge = document.createElement('span');
+            badge.className = `status-badge ${statusClasses[asset.status] || ''}`.trim();
+            badge.textContent = statusLabels[asset.status] || asset.status;
+            statusTd.appendChild(badge);
+            row.appendChild(statusTd);
+
+            appendTextCell(row, asset.holder_name);
+            appendTextCell(row, asset.location);
+
+            const actionTd = document.createElement('td');
+            const detailLink = document.createElement('a');
+            detailLink.href = `/assets/${asset.id}`;
+            detailLink.className = 'opt-link';
+            detailLink.textContent = '详情';
+            actionTd.appendChild(detailLink);
+            const labelLink = document.createElement('a');
+            labelLink.href = `/assets/${asset.id}/label`;
+            labelLink.className = 'opt-link';
+            labelLink.target = '_blank';
+            labelLink.textContent = '标签';
+            actionTd.appendChild(labelLink);
+            row.appendChild(actionTd);
+        }
         tbody.appendChild(row);
     });
     const emptyState = document.getElementById('emptyState');
@@ -258,15 +350,134 @@ function toggleSelectAll(cb) {
 function updateBatchBar() {
     const checked = document.querySelectorAll('.asset-checkbox:checked');
     const total = document.querySelectorAll('.asset-checkbox').length;
-    const btn = document.getElementById('batchLabelBtn');
+    const labelBtn = document.getElementById('batchLabelBtn');
+    const deleteBtn = document.getElementById('batchDeleteBtn');
+    const restoreBtn = document.getElementById('batchRestoreBtn');
+    const purgeBtn = document.getElementById('batchPurgeBtn');
     const hint = document.getElementById('batchHint');
     if (total === 0) {
         document.getElementById('batchBar').style.display = 'none';
         return;
     }
     document.getElementById('batchBar').style.display = 'flex';
-    btn.disabled = checked.length === 0;
-    hint.textContent = checked.length > 0 ? checked.length + ' 项已选' : '请先勾选资产';
+    const hasSelection = checked.length > 0;
+    if (isRecycleMode) {
+        restoreBtn.disabled = !hasSelection;
+        purgeBtn.disabled = !hasSelection;
+    } else {
+        labelBtn.disabled = !hasSelection;
+        deleteBtn.disabled = !hasSelection;
+    }
+    hint.textContent = hasSelection ? checked.length + ' 项已选' : '请先勾选资产';
+}
+
+function batchDeleteAssets() {
+    const checked = document.querySelectorAll('.asset-checkbox:checked');
+    if (!checked.length) return;
+    pendingDeleteIds = Array.from(checked).map(cb => parseInt(cb.value));
+    document.getElementById('deleteReasonInput').value = '';
+    document.getElementById('reasonRequired').style.display = 'none';
+    document.getElementById('deleteReasonModal').style.display = 'flex';
+}
+
+function cancelBatchDelete() {
+    document.getElementById('deleteReasonModal').style.display = 'none';
+    pendingDeleteIds = [];
+}
+
+async function confirmBatchDelete() {
+    const reason = document.getElementById('deleteReasonInput').value.trim();
+    document.getElementById('deleteReasonModal').style.display = 'none';
+    try {
+        const result = await apiFetch('/api/assets/batch-delete', {
+            method: 'POST',
+            body: JSON.stringify({ids: pendingDeleteIds, reason})
+        });
+        let msg = `已移入回收站 ${result.deleted} 项`;
+        if (result.skipped && result.skipped.length) {
+            msg += `，跳过 ${result.skipped.length} 项`;
+        }
+        alert(msg);
+        loadAssets();
+    } catch (err) {
+        if (err.message && !err.message.includes('操作失败')) alert(err.message);
+    }
+    pendingDeleteIds = [];
+}
+
+async function restoreAsset(id) {
+    try {
+        await apiFetch(`/api/assets/${id}/restore`, {method: 'POST'});
+        alert('资产已恢复');
+        loadAssets();
+    } catch (err) {
+        if (err.message && !err.message.includes('操作失败')) alert(err.message);
+    }
+}
+
+function showPurgeConfirm(id) {
+    pendingPurgeIds = id;
+    document.getElementById('purgeConfirmInput').value = '';
+    document.getElementById('purgeConfirmModal').style.display = 'flex';
+}
+
+function cancelPurge() {
+    document.getElementById('purgeConfirmModal').style.display = 'none';
+    pendingPurgeIds = null;
+}
+
+async function confirmPurge() {
+    const input = document.getElementById('purgeConfirmInput').value.trim();
+    if (input !== 'DELETE') { alert('请输入 DELETE 以确认'); return; }
+    document.getElementById('purgeConfirmModal').style.display = 'none';
+    try {
+        if (Array.isArray(pendingPurgeIds)) {
+            const result = await apiFetch('/api/assets/batch-purge', {
+                method: 'POST',
+                body: JSON.stringify({ids: pendingPurgeIds, confirm: 'DELETE'})
+            });
+            let msg = `已永久删除 ${result.purged} 项`;
+            if (result.skipped && result.skipped.length) msg += `，跳过 ${result.skipped.length} 项`;
+            alert(msg);
+        } else if (pendingPurgeIds) {
+            await apiFetch(`/api/assets/${pendingPurgeIds}/purge`, {
+                method: 'DELETE',
+                body: JSON.stringify({confirm: 'DELETE'})
+            });
+            alert('资产已永久删除');
+        }
+        loadAssets();
+    } catch (err) {
+        if (err.message && !err.message.includes('操作失败')) alert(err.message);
+    }
+    pendingPurgeIds = null;
+}
+
+async function batchRestoreAssets() {
+    const checked = document.querySelectorAll('.asset-checkbox:checked');
+    if (!checked.length) return;
+    const ids = Array.from(checked).map(cb => parseInt(cb.value));
+    if (!confirm(`确定恢复选中的 ${ids.length} 项资产吗？`)) return;
+    try {
+        const result = await apiFetch('/api/assets/batch-restore', {
+            method: 'POST',
+            body: JSON.stringify({ids})
+        });
+        let msg = `已恢复 ${result.restored} 项`;
+        if (result.skipped && result.skipped.length) msg += `，跳过 ${result.skipped.length} 项`;
+        alert(msg);
+        loadAssets();
+    } catch (err) {
+        if (err.message && !err.message.includes('操作失败')) alert(err.message);
+    }
+}
+
+function batchPurgeAssets() {
+    const checked = document.querySelectorAll('.asset-checkbox:checked');
+    if (!checked.length) return;
+    pendingPurgeIds = Array.from(checked).map(cb => parseInt(cb.value));
+    document.getElementById('purgeConfirmInput').value = '';
+    document.getElementById('purgeConfirmModal').style.display = 'flex';
 }
 
 function escapePrintText(value) {
@@ -396,6 +607,7 @@ function renderImportResult(data) {
 }
 
 function exportCSV() {
+    if (isRecycleMode) return;
     const search = document.getElementById('searchInput').value.trim();
     const category = document.getElementById('categoryFilter').value;
     const checked = [...document.querySelectorAll('.asset-checkbox:checked')];
@@ -418,6 +630,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!tab) return;
         currentStatus = tab.dataset.status || '';
         document.querySelectorAll('.tab-btn').forEach(item => item.classList.toggle('active', item === tab));
+        updateUIForMode();
         loadAssets();
     });
     document.getElementById('asset-table-body').addEventListener('click', event => {
@@ -429,6 +642,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (event.target.classList.contains('asset-checkbox')) updateBatchBar();
     });
     document.addEventListener('asset:changed', () => loadAssets(currentPage));
+    updateUIForMode();
     loadAssets();
 });
 </script>

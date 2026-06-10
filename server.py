@@ -6,7 +6,7 @@ import logging
 import os
 from datetime import date, datetime
 from flask import Flask, g, jsonify, request, render_template, redirect, url_for, session, Response
-from werkzeug.security import check_password_hash
+from werkzeug.security import check_password_hash, generate_password_hash
 from models import (
     Database, VALID_CATEGORIES, VALID_STATUSES, STATE_TRANSITIONS,
     log_activity, get_categories_meta, LABEL_FIELDS_DEFAULT,
@@ -237,6 +237,11 @@ def asset_label_page(asset_id):
     user = require_role("admin")
     if not user:
         return redirect(url_for("login_page"))
+    db = get_db()
+    with db.get_conn() as conn:
+        row = conn.execute("SELECT deleted_at FROM asset WHERE id = ?", (asset_id,)).fetchone()
+        if not row or row["deleted_at"]:
+            return redirect(url_for("assets_page"))
     return render_template("admin/label.html", user=user, asset_id=asset_id)
 
 
@@ -276,7 +281,7 @@ def consumables_page():
                    pc.unit as c_unit, pc.notes as c_notes
             FROM asset a
             LEFT JOIN printer_consumable pc ON pc.asset_id = a.id AND pc.type = 'toner'
-            WHERE a.category = 'printer'
+            WHERE a.category = 'printer' AND a.deleted_at IS NULL
             ORDER BY a.id, pc.id
         """).fetchall()
         printers_map = {}
@@ -432,6 +437,36 @@ def api_logout():
     return jsonify({"ok": True})
 
 
+@app.route("/api/change-password", methods=["POST"])
+def api_change_password():
+    user = current_user()
+    if not user:
+        return jsonify({"error": "未登录"}), 401
+    data = request.get_json() or {}
+    old_password = data.get("old_password", "")
+    new_password = data.get("new_password", "")
+    if not old_password or not new_password:
+        return jsonify({"error": "旧密码和新密码不能为空"}), 400
+    db = get_db()
+    with db.get_conn() as conn:
+        row = conn.execute('SELECT * FROM "user" WHERE id = ?', (user["id"],)).fetchone()
+        if not row:
+            return jsonify({"error": "用户不存在"}), 404
+        pw_row = dict(row)
+        stored = pw_row["password_hash"] or ""
+        if "$" in stored:
+            if not check_password_hash(stored, old_password):
+                return jsonify({"error": "旧密码错误"}), 400
+        elif stored != old_password:
+            return jsonify({"error": "旧密码错误"}), 400
+        conn.execute(
+            'UPDATE "user" SET password_hash = ? WHERE id = ?',
+            (generate_password_hash(new_password), user["id"]),
+        )
+        log_activity(conn, user["id"], "change_password", "user", user["id"], "修改密码")
+    return jsonify({"ok": True})
+
+
 @app.route("/api/me")
 def api_me():
     user = current_user()
@@ -446,12 +481,12 @@ def api_me():
 def api_stats():
     db = get_db()
     with db.get_conn() as conn:
-        total = conn.execute("SELECT COUNT(*) as c FROM asset").fetchone()["c"]
+        total = conn.execute("SELECT COUNT(*) as c FROM asset WHERE deleted_at IS NULL").fetchone()["c"]
         by_status = {}
-        for row in conn.execute("SELECT status, COUNT(*) as c FROM asset GROUP BY status"):
+        for row in conn.execute("SELECT status, COUNT(*) as c FROM asset WHERE deleted_at IS NULL GROUP BY status"):
             by_status[row["status"]] = row["c"]
         by_category = {}
-        for row in conn.execute("SELECT category, COUNT(*) as c FROM asset GROUP BY category"):
+        for row in conn.execute("SELECT category, COUNT(*) as c FROM asset WHERE deleted_at IS NULL GROUP BY category"):
             by_category[row["category"]] = row["c"]
         recent_events = []
         for row in conn.execute(
@@ -459,19 +494,20 @@ def api_stats():
                FROM lifecycle_event le
                JOIN "user" u ON le.operator_id = u.id
                JOIN asset a ON le.asset_id = a.id
+               WHERE a.deleted_at IS NULL
                ORDER BY le.created_at DESC LIMIT 10"""
         ):
             recent_events.append(dict(row))
         warranty_expiring = [_asset_dict(r) for r in conn.execute(
             """SELECT a.*, e.name as holder_name FROM asset a
                LEFT JOIN employee e ON a.current_holder_id = e.id
-               WHERE a.warranty_date IS NOT NULL AND a.status != 'scrapped'
+               WHERE a.deleted_at IS NULL AND a.warranty_date IS NOT NULL AND a.status != 'scrapped'
                  AND a.warranty_date <= date('now', '+30 days') AND a.warranty_date >= date('now')
                ORDER BY a.warranty_date""").fetchall()]
         warranty_expired = [_asset_dict(r) for r in conn.execute(
             """SELECT a.*, e.name as holder_name FROM asset a
                LEFT JOIN employee e ON a.current_holder_id = e.id
-               WHERE a.warranty_date IS NOT NULL AND a.status != 'scrapped'
+               WHERE a.deleted_at IS NULL AND a.warranty_date IS NOT NULL AND a.status != 'scrapped'
                  AND a.warranty_date < date('now')
                ORDER BY a.warranty_date""").fetchall()]
     return jsonify({
@@ -570,6 +606,11 @@ def api_assets_list():
     category = request.args.get("category")
     status = request.args.get("status")
     search = request.args.get("search")
+    deleted_only = request.args.get("deleted_only", "").lower() == "true"
+    if deleted_only:
+        user = require_role("admin")
+        if not user:
+            return jsonify({"error": "权限不足"}), 403
     page, error = _parse_positive_int_arg("page", 1)
     if error:
         return error
@@ -580,6 +621,10 @@ def api_assets_list():
 
     where_clauses = []
     params = []
+    if deleted_only:
+        where_clauses.append("a.deleted_at IS NOT NULL")
+    else:
+        where_clauses.append("a.deleted_at IS NULL")
     if category:
         where_clauses.append("a.category = ?")
         params.append(category)
@@ -590,7 +635,7 @@ def api_assets_list():
         where_clauses.append("(a.asset_tag LIKE ? OR a.name LIKE ? OR a.serial_number LIKE ? OR a.brand LIKE ?)")
         params.extend([f"%{search}%"] * 4)
 
-    where = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+    where = " WHERE " + " AND ".join(where_clauses)
 
     with db.get_conn() as conn:
         total = conn.execute(f"SELECT COUNT(*) as c FROM asset a{where}", params).fetchone()["c"]
@@ -664,6 +709,10 @@ def api_assets_get(asset_id):
         ).fetchone()
         if not row:
             return jsonify({"error": "资产不存在"}), 404
+        if row["deleted_at"]:
+            user = current_user()
+            if not user or user["role"] != "admin":
+                return jsonify({"error": "资产不存在"}), 404
         events = [dict(r) for r in conn.execute(
             """SELECT le.*, u.name as operator_name
                FROM lifecycle_event le JOIN "user" u ON le.operator_id = u.id
@@ -693,6 +742,8 @@ def api_assets_update(asset_id):
         row = conn.execute("SELECT * FROM asset WHERE id = ?", (asset_id,)).fetchone()
         if not row:
             return jsonify({"error": "资产不存在"}), 404
+        if row["deleted_at"]:
+            return jsonify({"error": "资产已删除，无法编辑"}), 400
         current = dict(row)
         effective_category = data.get("category", current["category"])
         if "category" in data and effective_category not in VALID_CATEGORIES:
@@ -731,18 +782,192 @@ def api_assets_delete(asset_id):
     user = require_role("admin")
     if not user:
         return jsonify({"error": "权限不足"}), 403
+    data = request.get_json(silent=True) or {}
+    reason = (data.get("reason") or "").strip()
     db = get_db()
     with db.get_conn() as conn:
         row = conn.execute("SELECT * FROM asset WHERE id = ?", (asset_id,)).fetchone()
         if not row:
             return jsonify({"error": "资产不存在"}), 404
-        if dict(row)["status"] != "in_stock":
-            return jsonify({"error": "只能删除库存中的资产"}), 400
-        log_activity(conn, user["id"], "delete_asset", "asset", asset_id, f"删除资产 {dict(row)['asset_tag']}")
+        a = dict(row)
+        if a.get("deleted_at"):
+            return jsonify({"error": "资产已在回收站"}), 400
+        if a["status"] != "in_stock" and not reason:
+            return jsonify({"error": "非库存资产必须填写删除原因"}), 400
+        snapshot = json.dumps({k: a[k] for k in ("status", "current_holder_id", "location", "asset_tag", "name")}, ensure_ascii=False)
+        conn.execute(
+            """UPDATE asset SET deleted_at = CURRENT_TIMESTAMP, deleted_by = ?,
+               delete_reason = ?, delete_snapshot = ?, updated_at = CURRENT_TIMESTAMP
+               WHERE id = ?""",
+            (user["id"], reason or None, snapshot, asset_id),
+        )
+        log_activity(conn, user["id"], "soft_delete_asset", "asset", asset_id,
+                     f"移入回收站 {a['asset_tag']}" + (f"，原因: {reason}" if reason else ""))
+        row = conn.execute("SELECT * FROM asset WHERE id = ?", (asset_id,)).fetchone()
+    return jsonify(_asset_dict(row))
+
+
+@app.route("/api/assets/batch-delete", methods=["POST"])
+def api_assets_batch_delete():
+    user = require_role("admin")
+    if not user:
+        return jsonify({"error": "权限不足"}), 403
+    data = request.get_json() or {}
+    ids = data.get("ids", [])
+    reason = (data.get("reason") or "").strip()
+    ids, err = _parse_id_list(ids)
+    if err:
+        return err
+    db = get_db()
+    deleted = 0
+    skipped = []
+    import json as _json
+    with db.get_conn() as conn:
+        for aid in ids:
+            row = conn.execute("SELECT * FROM asset WHERE id = ?", (aid,)).fetchone()
+            if not row:
+                skipped.append({"id": aid, "reason": "资产不存在"})
+                continue
+            a = dict(row)
+            if a.get("deleted_at"):
+                skipped.append({"id": aid, "reason": "已在回收站"})
+                continue
+            item_reason = reason
+            if a["status"] != "in_stock" and not item_reason:
+                skipped.append({"id": aid, "reason": f"非库存资产 ({a['status']}) 未填写原因"})
+                continue
+            snapshot = _json.dumps({k: a[k] for k in ("status", "current_holder_id", "location", "asset_tag", "name")}, ensure_ascii=False)
+            conn.execute(
+                """UPDATE asset SET deleted_at = CURRENT_TIMESTAMP, deleted_by = ?,
+                   delete_reason = ?, delete_snapshot = ?, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ?""",
+                (user["id"], item_reason or None, snapshot, aid),
+            )
+            deleted += 1
+        if deleted:
+            log_activity(conn, user["id"], "batch_soft_delete_assets", "asset", 0,
+                         f"批量移入回收站 {deleted} 项" + (f"，原因: {reason}" if reason else ""))
+    return jsonify({"deleted": deleted, "skipped": skipped, "total": len(ids)})
+
+
+# ---- API: 回收站 ----
+
+@app.route("/api/assets/<int:asset_id>/restore", methods=["POST"])
+def api_assets_restore(asset_id):
+    user = require_role("admin")
+    if not user:
+        return jsonify({"error": "权限不足"}), 403
+    db = get_db()
+    with db.get_conn() as conn:
+        row = conn.execute("SELECT * FROM asset WHERE id = ?", (asset_id,)).fetchone()
+        if not row:
+            return jsonify({"error": "资产不存在"}), 404
+        a = dict(row)
+        if not a.get("deleted_at"):
+            return jsonify({"error": "资产不在回收站中"}), 400
+        conn.execute(
+            """UPDATE asset SET deleted_at = NULL, deleted_by = NULL,
+               delete_reason = NULL, delete_snapshot = NULL, updated_at = CURRENT_TIMESTAMP
+               WHERE id = ?""",
+            (asset_id,),
+        )
+        log_activity(conn, user["id"], "restore_asset", "asset", asset_id,
+                     f"恢复资产 {a['asset_tag']}")
+        row = conn.execute("SELECT * FROM asset WHERE id = ?", (asset_id,)).fetchone()
+    return jsonify(_asset_dict(row))
+
+
+@app.route("/api/assets/<int:asset_id>/purge", methods=["DELETE"])
+def api_assets_purge(asset_id):
+    user = require_role("admin")
+    if not user:
+        return jsonify({"error": "权限不足"}), 403
+    data = request.get_json() or {}
+    if data.get("confirm") != "DELETE":
+        return jsonify({"error": "必须传入 confirm: \"DELETE\" 以确认永久删除"}), 400
+    db = get_db()
+    with db.get_conn() as conn:
+        row = conn.execute("SELECT * FROM asset WHERE id = ?", (asset_id,)).fetchone()
+        if not row:
+            return jsonify({"error": "资产不存在"}), 404
+        a = dict(row)
+        if not a.get("deleted_at"):
+            return jsonify({"error": "只能永久删除回收站中的资产"}), 400
+        tag = a["asset_tag"]
+        conn.execute("UPDATE printer_consumable SET asset_id = NULL WHERE asset_id = ?", (asset_id,))
         conn.execute("DELETE FROM lifecycle_event WHERE asset_id = ?", (asset_id,))
         conn.execute("DELETE FROM maintenance_record WHERE asset_id = ?", (asset_id,))
         conn.execute("DELETE FROM asset WHERE id = ?", (asset_id,))
+        log_activity(conn, user["id"], "purge_asset", "asset", asset_id, f"永久删除资产 {tag}")
     return jsonify({"ok": True})
+
+
+@app.route("/api/assets/batch-restore", methods=["POST"])
+def api_assets_batch_restore():
+    user = require_role("admin")
+    if not user:
+        return jsonify({"error": "权限不足"}), 403
+    data = request.get_json() or {}
+    ids, err = _parse_id_list(data.get("ids", []))
+    if err:
+        return err
+    db = get_db()
+    restored = 0
+    skipped = []
+    with db.get_conn() as conn:
+        for aid in ids:
+            row = conn.execute("SELECT * FROM asset WHERE id = ?", (aid,)).fetchone()
+            if not row:
+                skipped.append({"id": aid, "reason": "资产不存在"})
+                continue
+            a = dict(row)
+            if not a.get("deleted_at"):
+                skipped.append({"id": aid, "reason": "不在回收站中"})
+                continue
+            conn.execute(
+                """UPDATE asset SET deleted_at = NULL, deleted_by = NULL,
+                   delete_reason = NULL, delete_snapshot = NULL, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ?""",
+                (aid,),
+            )
+            restored += 1
+        if restored:
+            log_activity(conn, user["id"], "batch_restore_assets", "asset", 0, f"批量恢复 {restored} 项资产")
+    return jsonify({"restored": restored, "skipped": skipped, "total": len(ids)})
+
+
+@app.route("/api/assets/batch-purge", methods=["POST"])
+def api_assets_batch_purge():
+    user = require_role("admin")
+    if not user:
+        return jsonify({"error": "权限不足"}), 403
+    data = request.get_json() or {}
+    if data.get("confirm") != "DELETE":
+        return jsonify({"error": "必须传入 confirm: \"DELETE\" 以确认永久删除"}), 400
+    ids, err = _parse_id_list(data.get("ids", []))
+    if err:
+        return err
+    db = get_db()
+    purged = 0
+    skipped = []
+    with db.get_conn() as conn:
+        for aid in ids:
+            row = conn.execute("SELECT * FROM asset WHERE id = ?", (aid,)).fetchone()
+            if not row:
+                skipped.append({"id": aid, "reason": "资产不存在"})
+                continue
+            a = dict(row)
+            if not a.get("deleted_at"):
+                skipped.append({"id": aid, "reason": "不在回收站中，不可永久删除"})
+                continue
+            conn.execute("UPDATE printer_consumable SET asset_id = NULL WHERE asset_id = ?", (aid,))
+            conn.execute("DELETE FROM lifecycle_event WHERE asset_id = ?", (aid,))
+            conn.execute("DELETE FROM maintenance_record WHERE asset_id = ?", (aid,))
+            conn.execute("DELETE FROM asset WHERE id = ?", (aid,))
+            purged += 1
+        if purged:
+            log_activity(conn, user["id"], "batch_purge_assets", "asset", 0, f"批量永久删除 {purged} 项资产")
+    return jsonify({"purged": purged, "skipped": skipped, "total": len(ids)})
 
 
 # ---- API: 生命周期操作 ----
@@ -1108,7 +1333,7 @@ def api_my_assets():
             return jsonify({"assets": []})
         q = """SELECT a.*, e.name as holder_name FROM asset a
                LEFT JOIN employee e ON a.current_holder_id = e.id
-               WHERE a.current_holder_id = ?"""
+               WHERE a.current_holder_id = ? AND a.deleted_at IS NULL"""
         params = [emp["id"]]
         if search:
             q += " AND (a.asset_tag LIKE ? OR a.name LIKE ?)"
@@ -1168,6 +1393,8 @@ def api_asset_qr(asset_id):
         row = conn.execute("SELECT * FROM asset WHERE id = ?", (asset_id,)).fetchone()
         if not row:
             return jsonify({"error": "资产不存在"}), 404
+        if row["deleted_at"]:
+            return jsonify({"error": "资产已删除"}), 404
     host = request.host_url.rstrip("/")
     qr_base = get_db().get_config("qr_base_url", host)
     qr_url = f"{qr_base}/scan/{asset_id}"
@@ -1209,6 +1436,9 @@ def api_batch_labels():
         missing_ids = [aid for aid in asset_ids if aid not in found_ids]
         if missing_ids:
             return jsonify({"error": f"资产不存在: {', '.join(map(str, missing_ids))}"}), 400
+        deleted_ids = [row["id"] for row in rows if row["deleted_at"]]
+        if deleted_ids:
+            return jsonify({"error": f"资产已删除，无法打印标签: {', '.join(map(str, deleted_ids))}"}), 400
         assets_by_id = {row["id"]: _asset_dict(row) for row in rows}
         assets = [assets_by_id[aid] for aid in asset_ids]
         # 记录打印事件
@@ -1224,12 +1454,32 @@ def api_batch_labels():
 
 # ---- 辅助函数 ----
 
+def _parse_id_list(ids, field_name="ids"):
+    """Parse and validate a list of positive integer IDs.
+    Rejects non-int/coerceable, zero, negative, and duplicate values.
+    Returns (ids_list, error_response)."""
+    if not isinstance(ids, list) or not ids:
+        return None, (jsonify({"error": f"{field_name} 必须为非空数组"}), 400)
+    result = []
+    seen = set()
+    for x in ids:
+        if type(x) is not int or x <= 0:
+            return None, (jsonify({"error": f"{field_name} 包含无效值（必须为正整数）"}), 400)
+        if x in seen:
+            return None, (jsonify({"error": f"{field_name} 包含重复值 {x}"}), 400)
+        seen.add(x)
+        result.append(x)
+    return result, None
+
+
 def _get_asset_for_update(conn, asset_id, event_type):
     """获取资产并校验状态转换合法性，返回 (asset_dict) 或 (json_response, status_code)"""
     row = conn.execute("SELECT * FROM asset WHERE id = ?", (asset_id,)).fetchone()
     if not row:
         return jsonify({"error": "资产不存在"}), 404
     asset = dict(row)
+    if asset.get("deleted_at"):
+        return jsonify({"error": "资产已删除，无法执行操作"}), 400
     allowed = STATE_TRANSITIONS.get(asset["status"], [])
     if event_type not in allowed:
         return jsonify({"error": f"当前状态 '{asset['status']}' 不允许执行 '{event_type}' 操作"}), 400
@@ -1417,7 +1667,7 @@ def api_assets_export():
     search = request.args.get("search")
     asset_ids = request.args.get("ids")
 
-    where_clauses = []
+    where_clauses = ["a.deleted_at IS NULL"]
     params = []
     if category:
         where_clauses.append("a.category = ?")
@@ -1565,13 +1815,13 @@ def api_public_asset(asset_id):
     db = get_db()
     with db.get_conn() as conn:
         row = conn.execute(
-            """SELECT id, asset_tag, name, category, status
+            """SELECT id, asset_tag, name, category, status, deleted_at
                FROM asset
                WHERE id = ?""",
             (asset_id,),
         ).fetchone()
-        if not row:
-            return jsonify({"error": "资产不存在"}), 404
+        if not row or row["deleted_at"]:
+            return jsonify({"error": "资产不存在或已下架"}), 404
     return jsonify(_public_asset_dict(row))
 
 
@@ -1583,13 +1833,13 @@ def api_public_asset_lookup():
     db = get_db()
     with db.get_conn() as conn:
         row = conn.execute(
-            """SELECT id, asset_tag, name, category, status
+            """SELECT id, asset_tag, name, category, status, deleted_at
                FROM asset
                WHERE asset_tag = ? COLLATE NOCASE""",
             (asset_tag,),
         ).fetchone()
-        if not row:
-            return jsonify({"error": "资产不存在"}), 404
+        if not row or row["deleted_at"]:
+            return jsonify({"error": "资产不存在或已下架"}), 404
     return jsonify(_public_asset_dict(row))
 
 
@@ -2170,7 +2420,7 @@ def api_printers_consumables():
                    pc.unit as c_unit, pc.notes as c_notes
             FROM asset a
             LEFT JOIN printer_consumable pc ON pc.asset_id = a.id AND pc.type = 'toner'
-            WHERE a.category = 'printer'
+            WHERE a.category = 'printer' AND a.deleted_at IS NULL
             ORDER BY a.id, pc.id
         """).fetchall()
 
@@ -2289,7 +2539,7 @@ def api_employees():
     db = get_db()
     with db.get_conn() as conn:
         q = """SELECT e.*, COUNT(a.id) as asset_count
-               FROM employee e LEFT JOIN asset a ON a.current_holder_id = e.id"""
+               FROM employee e LEFT JOIN asset a ON a.current_holder_id = e.id AND a.deleted_at IS NULL"""
         params = []
         where = []
         if status != "all":
@@ -2376,7 +2626,7 @@ def api_employees_delete(emp_id):
             return jsonify({"error": "员工不存在"}), 404
         assets = conn.execute(
             """SELECT id FROM asset
-               WHERE current_holder_id = ? AND status != 'scrapped'""",
+               WHERE current_holder_id = ? AND status != 'scrapped' AND deleted_at IS NULL""",
             (emp_id,),
         ).fetchall()
         if assets and not move_assets_to_stock:
@@ -2549,7 +2799,6 @@ def api_users_create():
     if role not in VALID_ROLES:
         return jsonify({"error": f"无效角色: {role}"}), 400
 
-    from werkzeug.security import generate_password_hash
     password_hash = generate_password_hash(data["password"])
 
     db = get_db()
@@ -2652,7 +2901,6 @@ def api_users_reset_password(user_id):
     if not new_password:
         return jsonify({"error": "密码不能为空"}), 400
 
-    from werkzeug.security import generate_password_hash
     password_hash = generate_password_hash(new_password)
 
     db = get_db()

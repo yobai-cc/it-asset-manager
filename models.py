@@ -162,6 +162,17 @@ class Database:
             if "target_employee_id" not in le_cols:
                 conn.execute("ALTER TABLE lifecycle_event ADD COLUMN target_employee_id INTEGER REFERENCES employee(id)")
 
+            # ---- 软删除字段 ----
+            soft_del_cols = [r[1] for r in conn.execute("PRAGMA table_info(asset)").fetchall()]
+            for col_name, col_def in [
+                ("deleted_at", "DATETIME"),
+                ("deleted_by", "INTEGER REFERENCES \"user\"(id)"),
+                ("delete_reason", "TEXT"),
+                ("delete_snapshot", "TEXT"),
+            ]:
+                if col_name not in soft_del_cols:
+                    conn.execute(f"ALTER TABLE asset ADD COLUMN {col_name} {col_def}")
+
             emp_count = conn.execute("SELECT COUNT(*) FROM employee").fetchone()[0]
             user_count = conn.execute('SELECT COUNT(*) FROM "user"').fetchone()[0]
             if emp_count == 0 and user_count > 0:
@@ -356,7 +367,11 @@ CREATE TABLE IF NOT EXISTS asset (
     printer_type        TEXT,
     notes               TEXT,
     created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+    updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+    deleted_at          DATETIME,
+    deleted_by          INTEGER REFERENCES "user"(id),
+    delete_reason       TEXT,
+    delete_snapshot     TEXT
 );
 
 CREATE TABLE IF NOT EXISTS lifecycle_event (
