@@ -46,6 +46,7 @@ asset (资产台账)
 ├── current_holder_id → employee
 ├── location / purchase_date / purchase_price / warranty_date
 ├── printer_type [mono|color|NULL]
+├── deleted_at / deleted_by / delete_reason / delete_snapshot（软删除）
 └── created_at / updated_at
 
 lifecycle_event (生命周期事件)
@@ -113,6 +114,15 @@ maintenance ──maintenance_end──> assigned | in_stock
 
 `scrapped` 是终态，不可逆。
 
+### 软删除 / 回收站
+
+`deleted_at IS NOT NULL` 的资产进入回收站，不是普通 status 值。在册视图（全部/在用/库存/维修中/已报废）统一过滤 `deleted_at IS NULL`。
+
+- 软删除：非库存资产需填写原因，原状态/持有人保存在 `delete_snapshot`
+- 恢复：原持有人已停用 → 自动恢复为 in_stock + 清空持有人 + 关闭进行中维修记录
+- 永久删除：需 `confirm: "DELETE"`，打印机关联耗材自动解绑
+- 批量操作：batch-delete、batch-restore、batch-purge
+
 ### 数据库迁移
 
 - `SCHEMA` 常量：新装完整结构，`init_db()` 直接执行
@@ -140,24 +150,25 @@ maintenance ──maintenance_end──> assigned | in_stock
 | `/my/assets`, `/my/assets/<id>` | employee | 员工资产（保留的自助页） |
 | `/my/applications`, `/my/applications/new` | employee | 员工申请（保留的自助页） |
 
-### API 路由（~60 条）
+### API 路由（92 条）
 
 按功能分组：
 
 - **认证**：login, logout, me
 - **资产 CRUD**：列表(分页/搜索/筛选)、创建、详情、更新、删除
+- **软删除/回收站**：batch-delete, restore, batch-restore, purge, batch-purge
 - **生命周期**：assign, return, transfer, maintenance_start, maintenance_end, scrap, events
 - **维修**：列表、资产维修记录
 - **申请**：列表、创建、审批(approve/reject)
 - **员工自助**：my/assets, my/applications（保留）
 - **员工管理**：列表、创建、更新、删除、批量导入
 - **用户管理**：列表、创建、详情、更新、删除、重置密码
-- **耗材**：CRUD、库存调整、更换、更换历史、打印机耗材聚合
+- **耗材**：CRUD、库存调整、更换、更换历史、打印机耗材聚合、成本汇总
 - **标签**：QR 生成、批量标签
 - **分类**：分类元数据
 - **设置**：标签字段、QR 地址、Logo 上传
 - **导出/导入**：CSV 导出、CSV 批量导入
-- **操作记录**：活动日志
+- **操作记录**：活动日志、活动日志导出
 - **公开**：扫码资产信息
 
 ## 认证流程
@@ -173,6 +184,19 @@ POST /api/login {employee_id, password}
 - `current_user()` — 返回当前登录用户 dict 或 None
 - `require_role("admin")` — 要求指定角色，不满足返回 None
 - 密码迁移：`upgrade_db()` 自动将明文密码转为哈希
+
+### 资产 API 鉴权
+
+| 接口 | 未登录 | admin | employee |
+|------|--------|-------|----------|
+| `GET /api/assets` | 403 | 200（全部，含回收站） | 403 |
+| `GET /api/assets/<id>` | 401 | 200（全部） | 仅自己持有且未删除 |
+| `GET /api/assets/<id>/events` | 401 | 同上 | 同上 |
+| `GET /api/assets/<id>/maintenance` | 401 | 同上 | 同上 |
+| `GET /api/maintenance` | 403 | 200（排除已删除） | 403 |
+| `POST .../assign`、`POST .../transfer` | 403 | 200（拒绝停用员工） | 403 |
+
+`_get_visible_asset(conn, asset_id, user)` 统一处理资产可见性校验。
 
 ## 前端架构
 

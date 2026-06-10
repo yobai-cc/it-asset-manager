@@ -198,7 +198,10 @@
             if (target) a.target = target;
             actions.appendChild(a);
         }
-        if (data.status === 'in_stock') {
+        if (data.deleted_at) {
+            addBtn('恢复资产', 'btn-primary', function() { doRestore(); });
+            addBtn('永久删除', 'btn-danger', function() { doPurge(); });
+        } else if (data.status === 'in_stock') {
             addBtn('分配', 'btn-primary', function() { loadEmployees('assignUser'); openModal('assignModal'); });
         }
         if (data.status === 'assigned') {
@@ -212,8 +215,10 @@
         if (data.status !== 'scrapped') {
             addBtn('报废', 'btn-danger', function() { openModal('scrapModal'); });
         }
-        addLink('打印标签', '/assets/' + assetId + '/label', '_blank');
-        addLink('编辑', '/assets/' + assetId + '/edit');
+        if (!data.deleted_at) {
+            addLink('打印标签', '/assets/' + assetId + '/label', '_blank');
+            addLink('编辑', '/assets/' + assetId + '/edit');
+        }
 
         // Info grid: three columns
         var infoGrid = makeEl('div', 'detail-info-grid');
@@ -432,9 +437,30 @@
     async function doScrap() {
         var notes = document.getElementById('scrapNotes').value;
         try {
-            await apiFetch('/api/assets/' + assetId + '/scrap', {method:'POST', body:JSON.stringify({notes:notes})});
+            var result = await apiFetch('/api/assets/' + assetId + '/scrap', {method:'POST', body:JSON.stringify({notes:notes})});
             closeModal('scrapModal');
+            if (result.detached_consumables) {
+                alert('打印机已报废，已将 ' + result.detached_consumables + ' 个关联耗材拆回未绑定库存');
+            }
             loadDetail();
+        } catch(e) {}
+    }
+
+    async function doRestore() {
+        if (!confirm('确定要恢复此资产吗？')) return;
+        try {
+            await apiFetch('/api/assets/' + assetId + '/restore', {method:'POST'});
+            alert('资产已恢复');
+            loadDetail();
+        } catch(e) {}
+    }
+
+    async function doPurge() {
+        if (!confirm('永久删除不可恢复，确定要删除此资产吗？')) return;
+        try {
+            await apiFetch('/api/assets/' + assetId + '/purge', {method:'DELETE', body:JSON.stringify({confirm:'DELETE'})});
+            alert('资产已永久删除');
+            window.location.href = '/assets';
         } catch(e) {}
     }
 

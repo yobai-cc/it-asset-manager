@@ -154,10 +154,10 @@ def app_client(db, monkeypatch):
 def seed_test_data(db):
     """插入测试基础数据"""
     with db.get_conn() as conn:
-        # 员工
-        conn.execute("INSERT INTO employee (name, department) VALUES ('管理员', 'IT部')")
-        conn.execute("INSERT INTO employee (name, department) VALUES ('张三', '研发部')")
-        conn.execute("INSERT INTO employee (name, department) VALUES ('李四', '市场部')")
+        # 员工（employee_id 与 user.employee_id 对应）
+        conn.execute("INSERT INTO employee (employee_id, name, department) VALUES ('admin', '管理员', 'IT部')")
+        conn.execute("INSERT INTO employee (employee_id, name, department) VALUES ('emp001', '张三', '研发部')")
+        conn.execute("INSERT INTO employee (employee_id, name, department) VALUES ('emp002', '李四', '市场部')")
 
         # 用户
         conn.execute(
@@ -607,13 +607,19 @@ class TestApplications:
 
 class TestEmployeeSelfService:
     def test_my_assets_unlinked_system_user_has_no_roster_assets(self, app_client, db):
-        """普通员工不再默认登录系统；未绑定花名册的系统用户不返回资产。"""
+        """未绑定花名册的系统用户不返回资产。"""
         seed_test_data(db)
         login_admin(app_client)
         res = app_client.post("/api/assets", json={"name": "PC", "category": "computer"})
         aid = res.get_json()["id"]
         app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
-        login_employee(app_client)
+        # 创建一个没有对应 employee 记录的用户
+        with db.get_conn() as conn:
+            conn.execute(
+                """INSERT INTO "user" (employee_id, name, department, role, password_hash)
+                   VALUES ('nolink', '未关联用户', 'IT部', 'employee', 'nolink')"""
+            )
+        login_employee(app_client, "nolink")
         res = app_client.get("/api/my/assets")
         assert res.status_code == 200
         assets = res.get_json()["assets"]
@@ -626,8 +632,13 @@ class TestEmployeeSelfService:
         res = app_client.post("/api/assets", json={"name": "ThinkPad", "category": "computer"})
         aid = res.get_json()["id"]
         app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
-
-        login_employee(app_client)
+        # 创建一个没有对应 employee 记录的用户
+        with db.get_conn() as conn:
+            conn.execute(
+                """INSERT INTO "user" (employee_id, name, department, role, password_hash)
+                   VALUES ('nolink', '未关联用户', 'IT部', 'employee', 'nolink')"""
+            )
+        login_employee(app_client, "nolink")
         res = app_client.get("/api/my/assets?search=ThinkPad")
         assert res.get_json()["assets"] == []
 
@@ -3598,3 +3609,620 @@ class TestChangePassword:
             "new_password": "emp001new"
         })
         assert res.status_code == 200
+
+
+# ---- 鉴权收紧测试 ----
+
+class TestAssetListAuth:
+    """GET /api/assets 鉴权"""
+
+    def test_asset_list_requires_admin(self, app_client, db):
+        seed_test_data(db)
+        login_employee(app_client)
+        res = app_client.get("/api/assets")
+        assert res.status_code == 403
+
+    def test_asset_list_unauthenticated(self, app_client, db):
+        seed_test_data(db)
+        res = app_client.get("/api/assets")
+        assert res.status_code == 403
+
+    def test_asset_list_admin_ok(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.get("/api/assets")
+        assert res.status_code == 200
+
+
+class TestAssetDetailAuth:
+    """GET /api/assets/<id> 鉴权"""
+
+    def test_detail_unauthenticated(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={"name": "PC", "category": "computer"})
+        aid = res.get_json()["id"]
+        app_client.post("/api/logout")
+        res = app_client.get(f"/api/assets/{aid}")
+        assert res.status_code == 401
+
+    def test_detail_employee_own_asset(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={"name": "PC", "category": "computer"})
+        aid = res.get_json()["id"]
+        app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
+        login_employee(app_client, "emp001")
+        res = app_client.get(f"/api/assets/{aid}")
+        assert res.status_code == 200
+
+    def test_detail_employee_other_asset_denied(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={"name": "PC", "category": "computer"})
+        aid = res.get_json()["id"]
+        # 未分配给 emp001，用 emp002 登录
+        login_employee(app_client, "emp002")
+        res = app_client.get(f"/api/assets/{aid}")
+        assert res.status_code == 404
+
+    def test_detail_employee_deleted_denied(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={"name": "PC", "category": "computer"})
+        aid = res.get_json()["id"]
+        app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
+        app_client.delete(f"/api/assets/{aid}", json={"reason": "test"})
+        login_employee(app_client, "emp001")
+        res = app_client.get(f"/api/assets/{aid}")
+        assert res.status_code == 404
+
+
+class TestEventsMaintenanceAuth:
+    """events/maintenance 子接口鉴权"""
+
+    def _setup_deleted_asset(self, client):
+        res = client.post("/api/assets", json={"name": "PC", "category": "computer"})
+        aid = res.get_json()["id"]
+        client.delete(f"/api/assets/{aid}")
+        return aid
+
+    def test_events_unauthenticated(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        aid = self._setup_deleted_asset(app_client)
+        app_client.post("/api/logout")
+        res = app_client.get(f"/api/assets/{aid}/events")
+        assert res.status_code == 401
+
+    def test_events_employee_deleted_denied(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        aid = self._setup_deleted_asset(app_client)
+        login_employee(app_client)
+        res = app_client.get(f"/api/assets/{aid}/events")
+        assert res.status_code == 404
+
+    def test_events_employee_own_asset_ok(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={"name": "PC", "category": "computer"})
+        aid = res.get_json()["id"]
+        app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
+        login_employee(app_client, "emp001")
+        res = app_client.get(f"/api/assets/{aid}/events")
+        assert res.status_code == 200
+
+    def test_maintenance_unauthenticated(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        aid = self._setup_deleted_asset(app_client)
+        app_client.post("/api/logout")
+        res = app_client.get(f"/api/assets/{aid}/maintenance")
+        assert res.status_code == 401
+
+    def test_maintenance_employee_deleted_denied(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        aid = self._setup_deleted_asset(app_client)
+        login_employee(app_client)
+        res = app_client.get(f"/api/assets/{aid}/maintenance")
+        assert res.status_code == 404
+
+
+class TestMaintenanceListAuth:
+    """GET /api/maintenance 鉴权和过滤"""
+
+    def test_maintenance_list_requires_admin(self, app_client, db):
+        seed_test_data(db)
+        login_employee(app_client)
+        res = app_client.get("/api/maintenance")
+        assert res.status_code == 403
+
+    def test_maintenance_list_unauthenticated(self, app_client, db):
+        seed_test_data(db)
+        res = app_client.get("/api/maintenance")
+        assert res.status_code == 403
+
+    def test_maintenance_list_excludes_deleted(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={"name": "PC", "category": "computer"})
+        aid = res.get_json()["id"]
+        app_client.post(f"/api/assets/{aid}/maintenance",
+                        json={"description": "broken"})
+        app_client.delete(f"/api/assets/{aid}", json={"reason": "test"})
+        res = app_client.get("/api/maintenance")
+        assert res.status_code == 200
+        assert len(res.get_json()["records"]) == 0
+
+
+class TestRestoreInactiveHolder:
+    """恢复时检查持有人状态"""
+
+    def test_restore_with_inactive_holder_goes_to_stock(self, app_client, db):
+        """删除在用资产 → 停用持有人 → 恢复 → in_stock + holder=None"""
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={"name": "PC", "category": "computer"})
+        aid = res.get_json()["id"]
+        app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
+        app_client.delete(f"/api/assets/{aid}", json={"reason": "test"})
+        # 停用张三 (employee id=2)
+        with db.get_conn() as conn:
+            conn.execute("UPDATE employee SET status = 'inactive' WHERE id = 2")
+        res = app_client.post(f"/api/assets/{aid}/restore")
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data["status"] == "in_stock"
+        assert data["current_holder_id"] is None
+
+    def test_restore_with_active_holder_keeps_status(self, app_client, db):
+        """持有人仍 active → 恢复原状态"""
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={"name": "PC", "category": "computer"})
+        aid = res.get_json()["id"]
+        app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
+        app_client.delete(f"/api/assets/{aid}", json={"reason": "test"})
+        res = app_client.post(f"/api/assets/{aid}/restore")
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data["status"] == "assigned"
+        assert data["current_holder_id"] == 2
+
+    def test_batch_restore_inactive_holder(self, app_client, db):
+        """批量恢复：inactive 持有人 → in_stock"""
+        seed_test_data(db)
+        login_admin(app_client)
+        ids = []
+        for i in range(2):
+            res = app_client.post("/api/assets", json={"name": f"PC {i}", "category": "computer"})
+            ids.append(res.get_json()["id"])
+        for aid in ids:
+            app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": 2})
+            app_client.delete(f"/api/assets/{aid}", json={"reason": "test"})
+        with db.get_conn() as conn:
+            conn.execute("UPDATE employee SET status = 'inactive' WHERE id = 2")
+        res = app_client.post("/api/assets/batch-restore", json={"ids": ids})
+        data = res.get_json()
+        assert data["restored"] == 2
+        # 验证都变成了 in_stock
+        login_admin(app_client)
+        for aid in ids:
+            detail = app_client.get(f"/api/assets/{aid}").get_json()
+            assert detail["status"] == "in_stock"
+            assert detail["current_holder_id"] is None
+
+
+class TestDeletedPrinterConsumable:
+    """已删除打印机不能绑定耗材"""
+
+    def test_create_consumable_deleted_printer(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={
+            "name": "Printer", "category": "printer", "printer_type": "mono"
+        })
+        aid = res.get_json()["id"]
+        app_client.delete(f"/api/assets/{aid}")
+        res = app_client.post("/api/consumables", json={
+            "name": "Toner", "type": "toner", "stock": 5,
+            "asset_id": aid, "color": "black", "model": "原装"
+        })
+        assert res.status_code == 400
+        assert "已删除" in res.get_json()["error"]
+
+    def test_update_consumable_deleted_printer(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={
+            "name": "Printer", "category": "printer", "printer_type": "mono"
+        })
+        aid = res.get_json()["id"]
+        con_res = app_client.post("/api/consumables", json={
+            "name": "Toner", "type": "toner", "stock": 5,
+            "asset_id": aid, "color": "black", "model": "原装"
+        })
+        cid = con_res.get_json()["id"]
+        app_client.delete(f"/api/assets/{aid}")
+        res = app_client.put(f"/api/consumables/{cid}", json={"asset_id": aid})
+        assert res.status_code == 400
+
+
+# ---- Task 1.1: Restore closes maintenance records ----
+
+class TestRestoreClosesMaintenance:
+    """恢复 maintenance 资产到 in_stock 时应自动关闭进行中的维修记录"""
+
+    def _setup_asset_with_maintenance(self, app_client, db):
+        """创建一个在用→维修中的资产，带 in_progress 维修记录"""
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={"name": "TestPC", "category": "computer"})
+        aid = res.get_json()["id"]
+        with db.get_conn() as conn:
+            emp = conn.execute("SELECT id FROM employee WHERE employee_id = 'emp001'").fetchone()
+            emp_id = emp["id"]
+        app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": emp_id})
+        app_client.post(f"/api/assets/{aid}/maintenance", json={"description": "屏幕坏了"})
+        app_client.delete(f"/api/assets/{aid}", json={"reason": "测试软删除"})
+        with db.get_conn() as conn:
+            conn.execute("UPDATE employee SET status = 'inactive' WHERE id = ?", (emp_id,))
+        return aid, emp_id
+
+    def test_restore_closes_in_progress_maintenance(self, app_client, db):
+        aid, _ = self._setup_asset_with_maintenance(app_client, db)
+        res = app_client.post(f"/api/assets/{aid}/restore")
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data["status"] == "in_stock"
+        assert data["current_holder_id"] is None
+        with db.get_conn() as conn:
+            open_mr = conn.execute(
+                "SELECT * FROM maintenance_record WHERE asset_id = ? AND status = 'in_progress'", (aid,)
+            ).fetchall()
+            assert len(open_mr) == 0
+            resolved_mr = conn.execute(
+                "SELECT * FROM maintenance_record WHERE asset_id = ? AND status = 'resolved'", (aid,)
+            ).fetchall()
+            assert len(resolved_mr) >= 1
+
+    def test_batch_restore_closes_in_progress_maintenance(self, app_client, db):
+        aid, _ = self._setup_asset_with_maintenance(app_client, db)
+        res = app_client.post("/api/assets/batch-restore", json={"ids": [aid]})
+        assert res.status_code == 200
+        assert res.get_json()["restored"] == 1
+        with db.get_conn() as conn:
+            open_mr = conn.execute(
+                "SELECT * FROM maintenance_record WHERE asset_id = ? AND status = 'in_progress'", (aid,)
+            ).fetchall()
+            assert len(open_mr) == 0
+
+
+# ---- Task 1.4: Assign/Transfer rejects inactive employees ----
+
+class TestAssignTransferInactiveEmployee:
+    """分配/转移资产时拒绝停用员工"""
+
+    def test_assign_rejects_inactive_employee(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={"name": "TestPC", "category": "computer"})
+        aid = res.get_json()["id"]
+        with db.get_conn() as conn:
+            emp = conn.execute("SELECT id FROM employee WHERE employee_id = 'emp001'").fetchone()
+            emp_id = emp["id"]
+            conn.execute("UPDATE employee SET status = 'inactive' WHERE id = ?", (emp_id,))
+        res = app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": emp_id})
+        assert res.status_code == 400
+        assert "停用" in res.get_json()["error"]
+
+    def test_transfer_rejects_inactive_employee(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={"name": "TestPC", "category": "computer"})
+        aid = res.get_json()["id"]
+        with db.get_conn() as conn:
+            emp1 = conn.execute("SELECT id FROM employee WHERE employee_id = 'emp001'").fetchone()
+            emp2 = conn.execute("SELECT id FROM employee WHERE employee_id = 'emp002'").fetchone()
+        app_client.post(f"/api/assets/{aid}/assign", json={"target_employee_id": emp1["id"]})
+        with db.get_conn() as conn:
+            conn.execute("UPDATE employee SET status = 'inactive' WHERE id = ?", (emp2["id"],))
+        res = app_client.post(f"/api/assets/{aid}/transfer", json={"target_employee_id": emp2["id"]})
+        assert res.status_code == 400
+        assert "停用" in res.get_json()["error"]
+
+
+# ---- Task 2.1: Validate printer rejects scrapped ----
+
+class TestConsumableScrappedPrinter:
+    """报废打印机不能绑定耗材"""
+
+    def test_create_consumable_rejects_scrapped_printer(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={"name": "Printer", "category": "printer", "printer_type": "mono"})
+        aid = res.get_json()["id"]
+        app_client.post(f"/api/assets/{aid}/scrap", json={})
+        res = app_client.post("/api/consumables", json={
+            "name": "Toner", "type": "toner", "stock": 5,
+            "asset_id": aid, "color": "black", "model": "原装"
+        })
+        assert res.status_code == 400
+        assert "已报废" in res.get_json()["error"]
+
+    def test_update_consumable_rejects_scrapped_printer(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={"name": "Printer", "category": "printer", "printer_type": "mono"})
+        aid = res.get_json()["id"]
+        con_res = app_client.post("/api/consumables", json={
+            "name": "Toner", "type": "toner", "stock": 5,
+            "asset_id": aid, "color": "black", "model": "原装"
+        })
+        cid = con_res.get_json()["id"]
+        app_client.put(f"/api/consumables/{cid}", json={"asset_id": None})
+        app_client.post(f"/api/assets/{aid}/scrap", json={})
+        res = app_client.put(f"/api/consumables/{cid}", json={"asset_id": aid})
+        assert res.status_code == 400
+        assert "已报废" in res.get_json()["error"]
+
+
+# ---- Task 2.2: Scrap printer detaches consumables ----
+
+class TestScrapPrinterDetachesConsumables:
+    """报废打印机时自动拆回耗材"""
+
+    def _setup_printer_with_consumables(self, app_client, db, n=2):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={
+            "name": "HP Printer", "category": "printer", "printer_type": "color"
+        })
+        aid = res.get_json()["id"]
+        cids = []
+        for color in ["black", "cyan", "magenta", "yellow"][:n]:
+            c_res = app_client.post("/api/consumables", json={
+                "name": f"HP - {color}", "type": "toner", "stock": 3,
+                "asset_id": aid, "color": color, "model": "原装"
+            })
+            cids.append(c_res.get_json()["id"])
+        return aid, cids
+
+    def test_scrap_printer_detaches_consumables(self, app_client, db):
+        aid, cids = self._setup_printer_with_consumables(app_client, db, 2)
+        res = app_client.post(f"/api/assets/{aid}/scrap", json={})
+        assert res.status_code == 200
+        assert res.get_json()["detached_consumables"] == 2
+        with db.get_conn() as conn:
+            for cid in cids:
+                row = conn.execute("SELECT asset_id, notes FROM printer_consumable WHERE id = ?", (cid,)).fetchone()
+                assert row["asset_id"] is None
+                assert "报废" in row["notes"]
+
+    def test_scrap_printer_status_scrapped(self, app_client, db):
+        aid, _ = self._setup_printer_with_consumables(app_client, db, 1)
+        app_client.post(f"/api/assets/{aid}/scrap", json={})
+        with db.get_conn() as conn:
+            row = conn.execute("SELECT status FROM asset WHERE id = ?", (aid,)).fetchone()
+            assert row["status"] == "scrapped"
+
+    def test_scrap_non_printer_no_detach(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={"name": "TestPC", "category": "computer"})
+        aid = res.get_json()["id"]
+        res = app_client.post(f"/api/assets/{aid}/scrap", json={})
+        assert res.status_code == 200
+        assert "detached_consumables" not in res.get_json()
+
+
+# ---- Task 2.3: Scrapped/deleted printers hidden from printers/consumables view ----
+
+class TestPrinterConsumableViewExclusions:
+    """打印机耗材聚合视图排除报废/删除打印机"""
+
+    def test_scrapped_printer_hidden(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={
+            "name": "HP Printer", "category": "printer", "printer_type": "mono"
+        })
+        aid = res.get_json()["id"]
+        app_client.post("/api/consumables", json={
+            "name": "Toner", "type": "toner", "stock": 5,
+            "asset_id": aid, "color": "black", "model": "原装"
+        })
+        app_client.post(f"/api/assets/{aid}/scrap", json={})
+        res = app_client.get("/api/printers/consumables")
+        assert res.status_code == 200
+        printers = res.get_json()["printers"]
+        assert not any(p["asset_id"] == aid for p in printers)
+
+    def test_deleted_printer_hidden(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={
+            "name": "HP Printer", "category": "printer", "printer_type": "mono"
+        })
+        aid = res.get_json()["id"]
+        app_client.post("/api/consumables", json={
+            "name": "Toner", "type": "toner", "stock": 5,
+            "asset_id": aid, "color": "black", "model": "原装"
+        })
+        app_client.delete(f"/api/assets/{aid}")
+        res = app_client.get("/api/printers/consumables")
+        assert res.status_code == 200
+        printers = res.get_json()["printers"]
+        assert not any(p["asset_id"] == aid for p in printers)
+
+
+# ---- Task 2.4: Soft-delete printer keeps consumable link for restore ----
+
+class TestSoftDeletePrinterRestore:
+    """软删除打印机保留耗材关联，恢复后可继续使用"""
+
+    def test_soft_delete_keeps_consumable_link(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={
+            "name": "HP Printer", "category": "printer", "printer_type": "mono"
+        })
+        aid = res.get_json()["id"]
+        app_client.post("/api/consumables", json={
+            "name": "Toner", "type": "toner", "stock": 5,
+            "asset_id": aid, "color": "black", "model": "原装"
+        })
+        app_client.delete(f"/api/assets/{aid}")
+        with db.get_conn() as conn:
+            row = conn.execute("SELECT asset_id FROM printer_consumable WHERE asset_id = ?", (aid,)).fetchone()
+            assert row is not None
+        app_client.post(f"/api/assets/{aid}/restore")
+        res = app_client.get("/api/printers/consumables")
+        printers = res.get_json()["printers"]
+        assert any(p["asset_id"] == aid for p in printers)
+        printer = next(p for p in printers if p["asset_id"] == aid)
+        assert len(printer["consumables"]) == 1
+
+
+# ---- Task 2.5: Purge printer detaches with notes ----
+
+class TestPurgePrinterConsumables:
+    """永久删除打印机时耗材解绑带备注"""
+
+    def test_purge_printer_detaches_with_notes(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={
+            "name": "HP Printer", "category": "printer", "printer_type": "mono"
+        })
+        aid = res.get_json()["id"]
+        c_res = app_client.post("/api/consumables", json={
+            "name": "Toner", "type": "toner", "stock": 5,
+            "asset_id": aid, "color": "black", "model": "原装"
+        })
+        cid = c_res.get_json()["id"]
+        app_client.delete(f"/api/assets/{aid}")
+        res = app_client.delete(f"/api/assets/{aid}/purge", json={"confirm": "DELETE"})
+        assert res.status_code == 200
+        with db.get_conn() as conn:
+            row = conn.execute("SELECT asset_id, notes FROM printer_consumable WHERE id = ?", (cid,)).fetchone()
+            assert row["asset_id"] is None
+            assert "永久删除" in row["notes"]
+
+    def test_batch_purge_printer_detaches_with_notes(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={
+            "name": "HP Printer", "category": "printer", "printer_type": "mono"
+        })
+        aid = res.get_json()["id"]
+        c_res = app_client.post("/api/consumables", json={
+            "name": "Toner", "type": "toner", "stock": 5,
+            "asset_id": aid, "color": "black", "model": "原装"
+        })
+        cid = c_res.get_json()["id"]
+        app_client.delete(f"/api/assets/{aid}")
+        res = app_client.post("/api/assets/batch-purge", json={"ids": [aid], "confirm": "DELETE"})
+        assert res.status_code == 200
+        with db.get_conn() as conn:
+            row = conn.execute("SELECT asset_id, notes FROM printer_consumable WHERE id = ?", (cid,)).fetchone()
+            assert row["asset_id"] is None
+            assert "永久删除" in row["notes"]
+
+
+# ---- Task 2.6: Replace rejects deleted/scrapped printer ----
+
+class TestReplaceConsumablePrinterCheck:
+    """更换耗材时检查打印机可用性"""
+
+    def _setup_consumable_with_printer(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={
+            "name": "HP Printer", "category": "printer", "printer_type": "mono"
+        })
+        aid = res.get_json()["id"]
+        c_res = app_client.post("/api/consumables", json={
+            "name": "Toner", "type": "toner", "stock": 5,
+            "asset_id": aid, "color": "black", "model": "原装",
+            "installed_at": "2026-01-01"
+        })
+        cid = c_res.get_json()["id"]
+        return aid, cid
+
+    def test_replace_rejects_deleted_printer(self, app_client, db):
+        aid, cid = self._setup_consumable_with_printer(app_client, db)
+        app_client.delete(f"/api/assets/{aid}")
+        res = app_client.post(f"/api/consumables/{cid}/replace", json={
+            "replaced_at": "2026-06-01", "new_price": 200
+        })
+        assert res.status_code == 400
+        assert "已删除" in res.get_json()["error"]
+
+    def test_replace_rejects_scrapped_printer(self, app_client, db):
+        aid, cid = self._setup_consumable_with_printer(app_client, db)
+        app_client.put(f"/api/consumables/{cid}", json={"asset_id": None})
+        app_client.post(f"/api/assets/{aid}/scrap", json={})
+        with db.get_conn() as conn:
+            conn.execute("UPDATE printer_consumable SET asset_id = ? WHERE id = ?", (aid, cid))
+        res = app_client.post(f"/api/consumables/{cid}/replace", json={
+            "replaced_at": "2026-06-01", "new_price": 200
+        })
+        assert res.status_code == 400
+        assert "已报废" in res.get_json()["error"]
+
+    def test_replace_unbound_consumable_ok(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        c_res = app_client.post("/api/consumables", json={
+            "name": "Loose Toner", "type": "toner", "stock": 5,
+            "color": "black", "model": "原装",
+            "installed_at": "2026-01-01"
+        })
+        cid = c_res.get_json()["id"]
+        res = app_client.post(f"/api/consumables/{cid}/replace", json={
+            "replaced_at": "2026-06-01", "new_price": 200
+        })
+        assert res.status_code == 200
+
+
+# ---- Task 1.5: Consumable printer display for deleted/scrapped ----
+
+class TestConsumablePrinterDisplay:
+    """耗材列表正确标记不可用打印机"""
+
+    def test_consumable_list_marks_deleted_printer(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={
+            "name": "HP Printer", "category": "printer", "printer_type": "mono"
+        })
+        aid = res.get_json()["id"]
+        app_client.post("/api/consumables", json={
+            "name": "Toner", "type": "toner", "stock": 5,
+            "asset_id": aid, "color": "black", "model": "原装"
+        })
+        app_client.delete(f"/api/assets/{aid}")
+        res = app_client.get("/api/consumables")
+        toner = next(c for c in res.get_json()["consumables"] if c.get("asset_id") == aid)
+        assert toner["printer_unavailable_reason"] == "deleted"
+        assert toner["printer_tag"] is None
+        assert toner["printer_name"] is None
+
+    def test_consumable_detail_marks_deleted_printer(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        res = app_client.post("/api/assets", json={
+            "name": "HP Printer", "category": "printer", "printer_type": "mono"
+        })
+        aid = res.get_json()["id"]
+        c_res = app_client.post("/api/consumables", json={
+            "name": "Toner", "type": "toner", "stock": 5,
+            "asset_id": aid, "color": "black", "model": "原装"
+        })
+        cid = c_res.get_json()["id"]
+        app_client.delete(f"/api/assets/{aid}")
+        res = app_client.get(f"/api/consumables/{cid}")
+        assert res.get_json()["printer_unavailable_reason"] == "deleted"

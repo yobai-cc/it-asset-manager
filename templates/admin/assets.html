@@ -215,11 +215,19 @@ async function loadAssets(page = 1) {
         row.appendChild(selectTd);
 
         const tagTd = document.createElement('td');
-        const tagLink = document.createElement('a');
-        tagLink.href = `/assets/${asset.id}`;
-        tagLink.className = 'tag-link';
-        tagLink.textContent = asset.asset_tag;
-        tagTd.appendChild(tagLink);
+        if (asset.deleted_at) {
+            const tagSpan = document.createElement('span');
+            tagSpan.className = 'tag-link';
+            tagSpan.style.color = 'var(--color-text-muted)';
+            tagSpan.textContent = asset.asset_tag;
+            tagTd.appendChild(tagSpan);
+        } else {
+            const tagLink = document.createElement('a');
+            tagLink.href = `/assets/${asset.id}`;
+            tagLink.className = 'tag-link';
+            tagLink.textContent = asset.asset_tag;
+            tagTd.appendChild(tagLink);
+        }
         row.appendChild(tagTd);
 
         const nameTd = document.createElement('td');
@@ -387,7 +395,6 @@ function cancelBatchDelete() {
 
 async function confirmBatchDelete() {
     const reason = document.getElementById('deleteReasonInput').value.trim();
-    document.getElementById('deleteReasonModal').style.display = 'none';
     try {
         const result = await apiFetch('/api/assets/batch-delete', {
             method: 'POST',
@@ -395,8 +402,30 @@ async function confirmBatchDelete() {
         });
         let msg = `已移入回收站 ${result.deleted} 项`;
         if (result.skipped && result.skipped.length) {
-            msg += `，跳过 ${result.skipped.length} 项`;
+            const alreadyDeleted = result.skipped.filter(s => s.reason.includes('已在回收站'));
+            const needReason = result.skipped.filter(s => !s.reason.includes('已在回收站'));
+            if (alreadyDeleted.length && !needReason.length) {
+                // All remaining skips are already deleted — just inform and close
+                msg += `\n\n${alreadyDeleted.length} 项已在回收站中，已跳过。`;
+                document.getElementById('deleteReasonModal').style.display = 'none';
+                alert(msg);
+                loadAssets();
+                pendingDeleteIds = [];
+                return;
+            }
+            const details = result.skipped.map(s => `#${s.id}: ${s.reason}`).join('\n');
+            msg += `\n\n跳过 ${result.skipped.length} 项：\n${details}`;
+            if (!reason && needReason.length) {
+                msg += '\n\n提示：填写删除原因即可移入非库存状态（在用/维修中）的资产。';
+            }
+            alert(msg);
+            document.getElementById('reasonRequired').style.display = '';
+            document.getElementById('deleteReasonInput').placeholder = '非库存资产需填写原因...';
+            // Remove already-deleted from pending so retry only sends the remaining
+            pendingDeleteIds = needReason.map(s => s.id);
+            return;
         }
+        document.getElementById('deleteReasonModal').style.display = 'none';
         alert(msg);
         loadAssets();
     } catch (err) {

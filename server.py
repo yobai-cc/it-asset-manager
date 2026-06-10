@@ -118,14 +118,32 @@ def _validate_non_negative_number(data, field_name, allow_none=True):
 
 
 def _validate_printer_asset_id(conn, asset_id):
-    """验证 asset_id 对应的资产存在且为打印机。返回 (ok, error_response)"""
+    """验证 asset_id 对应的资产存在、为打印机且未删除/未报废。返回 (ok, error_response)"""
     if asset_id is None:
         return True, None
-    row = conn.execute("SELECT category FROM asset WHERE id = ?", (asset_id,)).fetchone()
+    row = conn.execute("SELECT category, status, deleted_at FROM asset WHERE id = ?", (asset_id,)).fetchone()
     if not row:
         return False, (jsonify({"error": "关联资产不存在"}), 400)
+    if row["deleted_at"]:
+        return False, (jsonify({"error": "关联打印机已删除，不能绑定耗材"}), 400)
+    if row["status"] == "scrapped":
+        return False, (jsonify({"error": "关联打印机已报废，不能绑定耗材"}), 400)
     if row["category"] != "printer":
         return False, (jsonify({"error": "耗材只能关联打印机类资产"}), 400)
+    return True, None
+
+
+def _check_printer_operational(conn, asset_id, action_label="执行耗材操作"):
+    """检查绑定的打印机是否可运营（未删除、未报废）。返回 (ok, error_response)。"""
+    if asset_id is None:
+        return True, None
+    row = conn.execute("SELECT status, deleted_at FROM asset WHERE id = ?", (asset_id,)).fetchone()
+    if not row:
+        return True, None  # Asset was deleted permanently, not a printer-level block
+    if row["deleted_at"]:
+        return False, (jsonify({"error": f"关联打印机已删除，不能{action_label}"}), 400)
+    if row["status"] == "scrapped":
+        return False, (jsonify({"error": f"关联打印机已报废，不能{action_label}"}), 400)
     return True, None
 
 
@@ -144,12 +162,23 @@ def _consumable_usage_fields(row):
         estimated_daily_cost = round(float(price) / usage_days, 2)
     data["usage_days"] = usage_days
     data["estimated_daily_cost"] = estimated_daily_cost
+    # Mark printer availability
+    if data.get("asset_id"):
+        if data.get("printer_deleted_at"):
+            data["printer_unavailable_reason"] = "deleted"
+            data["printer_tag"] = None
+            data["printer_name"] = None
+        elif data.get("printer_status") == "scrapped":
+            data["printer_unavailable_reason"] = "scrapped"
+            data["printer_tag"] = None
+            data["printer_name"] = None
     return data
 
 
 def _select_consumable_with_printer(conn, consumable_id):
     return conn.execute(
-        """SELECT pc.*, a.asset_tag as printer_tag, a.name as printer_name
+        """SELECT pc.*, a.asset_tag as printer_tag, a.name as printer_name,
+                  a.status as printer_status, a.deleted_at as printer_deleted_at
            FROM printer_consumable pc
            LEFT JOIN asset a ON pc.asset_id = a.id
            WHERE pc.id = ?""", (consumable_id,),
@@ -281,7 +310,7 @@ def consumables_page():
                    pc.unit as c_unit, pc.notes as c_notes
             FROM asset a
             LEFT JOIN printer_consumable pc ON pc.asset_id = a.id AND pc.type = 'toner'
-            WHERE a.category = 'printer' AND a.deleted_at IS NULL
+            WHERE a.category = 'printer' AND a.deleted_at IS NULL AND a.status != 'scrapped'
             ORDER BY a.id, pc.id
         """).fetchall()
         printers_map = {}
@@ -602,15 +631,14 @@ def api_assets_import():
 
 @app.route("/api/assets", methods=["GET"])
 def api_assets_list():
+    user = require_role("admin")
+    if not user:
+        return jsonify({"error": "权限不足"}), 403
     db = get_db()
     category = request.args.get("category")
     status = request.args.get("status")
     search = request.args.get("search")
     deleted_only = request.args.get("deleted_only", "").lower() == "true"
-    if deleted_only:
-        user = require_role("admin")
-        if not user:
-            return jsonify({"error": "权限不足"}), 403
     page, error = _parse_positive_int_arg("page", 1)
     if error:
         return error
@@ -699,6 +727,9 @@ def api_assets_create():
 
 @app.route("/api/assets/<int:asset_id>", methods=["GET"])
 def api_assets_get(asset_id):
+    user = current_user()
+    if not user:
+        return jsonify({"error": "未登录"}), 401
     db = get_db()
     with db.get_conn() as conn:
         row = conn.execute(
@@ -709,9 +740,14 @@ def api_assets_get(asset_id):
         ).fetchone()
         if not row:
             return jsonify({"error": "资产不存在"}), 404
-        if row["deleted_at"]:
-            user = current_user()
-            if not user or user["role"] != "admin":
+        # admin 可看所有（含回收站）
+        if user["role"] != "admin":
+            # employee: 只能看自己持有且未删除的
+            if row["deleted_at"]:
+                return jsonify({"error": "资产不存在"}), 404
+            emp = conn.execute("SELECT id FROM employee WHERE employee_id = ?",
+                               (user["employee_id"],)).fetchone()
+            if not emp or row["current_holder_id"] != emp["id"]:
                 return jsonify({"error": "资产不存在"}), 404
         events = [dict(r) for r in conn.execute(
             """SELECT le.*, u.name as operator_name
@@ -865,14 +901,50 @@ def api_assets_restore(asset_id):
         a = dict(row)
         if not a.get("deleted_at"):
             return jsonify({"error": "资产不在回收站中"}), 400
-        conn.execute(
-            """UPDATE asset SET deleted_at = NULL, deleted_by = NULL,
-               delete_reason = NULL, delete_snapshot = NULL, updated_at = CURRENT_TIMESTAMP
-               WHERE id = ?""",
-            (asset_id,),
-        )
+        new_status = None
+        clear_holder = False
+        notes_suffix = ""
+        # 检查原持有人是否仍 active
+        if a.get("current_holder_id") and a["status"] in ("assigned", "maintenance"):
+            emp = conn.execute("SELECT status FROM employee WHERE id = ?",
+                               (a["current_holder_id"],)).fetchone()
+            if not emp or emp["status"] != "active":
+                new_status = "in_stock"
+                clear_holder = True
+                notes_suffix = "（原持有人已停用，恢复到库存）"
+        if new_status:
+            conn.execute(
+                """UPDATE asset SET deleted_at = NULL, deleted_by = NULL,
+                   delete_reason = NULL, delete_snapshot = NULL,
+                   status = ?, current_holder_id = NULL,
+                   updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ?""",
+                (new_status, asset_id),
+            )
+            # Close any in_progress maintenance records
+            open_mr = conn.execute(
+                "SELECT id FROM maintenance_record WHERE asset_id = ? AND status = 'in_progress'",
+                (asset_id,),
+            ).fetchall()
+            for mr in open_mr:
+                conn.execute(
+                    """UPDATE maintenance_record SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP,
+                       repair_notes = COALESCE(repair_notes || '\n', '') || '资产恢复到库存，自动关闭维修单'
+                       WHERE id = ?""",
+                    (mr["id"],),
+                )
+            if open_mr:
+                notes_suffix += f"，关闭 {len(open_mr)} 条进行中维修记录"
+        else:
+            conn.execute(
+                """UPDATE asset SET deleted_at = NULL, deleted_by = NULL,
+                   delete_reason = NULL, delete_snapshot = NULL,
+                   updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ?""",
+                (asset_id,),
+            )
         log_activity(conn, user["id"], "restore_asset", "asset", asset_id,
-                     f"恢复资产 {a['asset_tag']}")
+                     f"恢复资产 {a['asset_tag']}" + notes_suffix)
         row = conn.execute("SELECT * FROM asset WHERE id = ?", (asset_id,)).fetchone()
     return jsonify(_asset_dict(row))
 
@@ -894,7 +966,18 @@ def api_assets_purge(asset_id):
         if not a.get("deleted_at"):
             return jsonify({"error": "只能永久删除回收站中的资产"}), 400
         tag = a["asset_tag"]
-        conn.execute("UPDATE printer_consumable SET asset_id = NULL WHERE asset_id = ?", (asset_id,))
+        # Detach consumables with notes before deleting asset
+        detached = conn.execute(
+            "SELECT COUNT(*) as c FROM printer_consumable WHERE asset_id = ?", (asset_id,)
+        ).fetchone()["c"]
+        if detached > 0:
+            conn.execute(
+                """UPDATE printer_consumable SET asset_id = NULL,
+                   notes = COALESCE(notes || '\n', '') || '原关联打印机已永久删除，自动转为未绑定库存'
+                   WHERE asset_id = ?""", (asset_id,)
+            )
+            log_activity(conn, user["id"], "purge_printer_consumables", "asset", asset_id,
+                         f"打印机永久删除，已解绑耗材 {detached} 项")
         conn.execute("DELETE FROM lifecycle_event WHERE asset_id = ?", (asset_id,))
         conn.execute("DELETE FROM maintenance_record WHERE asset_id = ?", (asset_id,))
         conn.execute("DELETE FROM asset WHERE id = ?", (asset_id,))
@@ -924,12 +1007,41 @@ def api_assets_batch_restore():
             if not a.get("deleted_at"):
                 skipped.append({"id": aid, "reason": "不在回收站中"})
                 continue
-            conn.execute(
-                """UPDATE asset SET deleted_at = NULL, deleted_by = NULL,
-                   delete_reason = NULL, delete_snapshot = NULL, updated_at = CURRENT_TIMESTAMP
-                   WHERE id = ?""",
-                (aid,),
-            )
+            new_status = None
+            if a.get("current_holder_id") and a["status"] in ("assigned", "maintenance"):
+                emp = conn.execute("SELECT status FROM employee WHERE id = ?",
+                                   (a["current_holder_id"],)).fetchone()
+                if not emp or emp["status"] != "active":
+                    new_status = "in_stock"
+            if new_status:
+                conn.execute(
+                    """UPDATE asset SET deleted_at = NULL, deleted_by = NULL,
+                       delete_reason = NULL, delete_snapshot = NULL,
+                       status = ?, current_holder_id = NULL,
+                       updated_at = CURRENT_TIMESTAMP
+                       WHERE id = ?""",
+                    (new_status, aid),
+                )
+                # Close any in_progress maintenance records
+                open_mr = conn.execute(
+                    "SELECT id FROM maintenance_record WHERE asset_id = ? AND status = 'in_progress'",
+                    (aid,),
+                ).fetchall()
+                for mr in open_mr:
+                    conn.execute(
+                        """UPDATE maintenance_record SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP,
+                           repair_notes = COALESCE(repair_notes || '\n', '') || '资产恢复到库存，自动关闭维修单'
+                           WHERE id = ?""",
+                        (mr["id"],),
+                    )
+            else:
+                conn.execute(
+                    """UPDATE asset SET deleted_at = NULL, deleted_by = NULL,
+                       delete_reason = NULL, delete_snapshot = NULL,
+                       updated_at = CURRENT_TIMESTAMP
+                       WHERE id = ?""",
+                    (aid,),
+                )
             restored += 1
         if restored:
             log_activity(conn, user["id"], "batch_restore_assets", "asset", 0, f"批量恢复 {restored} 项资产")
@@ -960,7 +1072,11 @@ def api_assets_batch_purge():
             if not a.get("deleted_at"):
                 skipped.append({"id": aid, "reason": "不在回收站中，不可永久删除"})
                 continue
-            conn.execute("UPDATE printer_consumable SET asset_id = NULL WHERE asset_id = ?", (aid,))
+            conn.execute(
+                """UPDATE printer_consumable SET asset_id = NULL,
+                   notes = COALESCE(notes || '\n', '') || '原关联打印机已永久删除，自动转为未绑定库存'
+                   WHERE asset_id = ?""", (aid,)
+            )
             conn.execute("DELETE FROM lifecycle_event WHERE asset_id = ?", (aid,))
             conn.execute("DELETE FROM maintenance_record WHERE asset_id = ?", (aid,))
             conn.execute("DELETE FROM asset WHERE id = ?", (aid,))
@@ -986,9 +1102,11 @@ def api_assign(asset_id):
         asset = _get_asset_for_update(conn, asset_id, "assign")
         if isinstance(asset, tuple):
             return asset
-        emp = conn.execute("SELECT id FROM employee WHERE id = ?", (target_employee_id,)).fetchone()
+        emp = conn.execute("SELECT id, status FROM employee WHERE id = ?", (target_employee_id,)).fetchone()
         if not emp:
             return jsonify({"error": "员工不存在"}), 400
+        if emp["status"] != "active":
+            return jsonify({"error": "不能分配给停用员工"}), 400
         conn.execute(
             "UPDATE asset SET status = 'assigned', current_holder_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (target_employee_id, asset_id),
@@ -1042,9 +1160,11 @@ def api_transfer(asset_id):
         asset = _get_asset_for_update(conn, asset_id, "transfer")
         if isinstance(asset, tuple):
             return asset
-        emp = conn.execute("SELECT id FROM employee WHERE id = ?", (target_employee_id,)).fetchone()
+        emp = conn.execute("SELECT id, status FROM employee WHERE id = ?", (target_employee_id,)).fetchone()
         if not emp:
             return jsonify({"error": "员工不存在"}), 400
+        if emp["status"] != "active":
+            return jsonify({"error": "不能转移给停用员工"}), 400
         conn.execute(
             "UPDATE asset SET current_holder_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (target_employee_id, asset_id),
@@ -1144,10 +1264,25 @@ def api_scrap(asset_id):
         return jsonify({"error": "权限不足"}), 403
     data = request.get_json() or {}
     db = get_db()
+    detached_consumables = 0
     with db.get_conn() as conn:
         asset = _get_asset_for_update(conn, asset_id, "scrap")
         if isinstance(asset, tuple):
             return asset
+        # If printer, detach all consumables
+        if asset["category"] == "printer":
+            detached = conn.execute(
+                "SELECT COUNT(*) as c FROM printer_consumable WHERE asset_id = ?", (asset_id,)
+            ).fetchone()["c"]
+            if detached > 0:
+                conn.execute(
+                    """UPDATE printer_consumable SET asset_id = NULL,
+                       notes = COALESCE(notes || '\n', '') || '原关联打印机已报废，自动拆回库存'
+                       WHERE asset_id = ?""", (asset_id,)
+                )
+                detached_consumables = detached
+                log_activity(conn, user["id"], "scrap_printer_consumables", "asset", asset_id,
+                             f"打印机报废，已拆回库存耗材 {detached} 项")
         conn.execute(
             "UPDATE asset SET status = 'scrapped', current_holder_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (asset_id,),
@@ -1159,15 +1294,22 @@ def api_scrap(asset_id):
         )
         log_activity(conn, user["id"], "scrap", "asset", asset_id, data.get("notes"))
         row = conn.execute("SELECT * FROM asset WHERE id = ?", (asset_id,)).fetchone()
-    return jsonify(_asset_dict(row))
+    result = _asset_dict(row)
+    if detached_consumables:
+        result["detached_consumables"] = detached_consumables
+    return jsonify(result)
 
 
 # ---- API: 生命周期事件 ----
 
 @app.route("/api/assets/<int:asset_id>/events")
 def api_asset_events(asset_id):
+    user = current_user()
     db = get_db()
     with db.get_conn() as conn:
+        asset_or_err = _get_visible_asset(conn, asset_id, user)
+        if not isinstance(asset_or_err, dict):
+            return asset_or_err
         rows = conn.execute(
             """SELECT le.*, u.name as operator_name, e.name as target_employee_name
                FROM lifecycle_event le
@@ -1183,12 +1325,15 @@ def api_asset_events(asset_id):
 
 @app.route("/api/maintenance")
 def api_maintenance_list():
+    user = require_role("admin")
+    if not user:
+        return jsonify({"error": "权限不足"}), 403
     db = get_db()
     status = request.args.get("status")
     with db.get_conn() as conn:
         q = """SELECT mr.*, a.asset_tag, a.name as asset_name, u.name as reporter_name
                FROM maintenance_record mr
-               JOIN asset a ON mr.asset_id = a.id
+               JOIN asset a ON mr.asset_id = a.id AND a.deleted_at IS NULL
                JOIN "user" u ON mr.reported_by = u.id"""
         params = []
         if status:
@@ -1201,8 +1346,12 @@ def api_maintenance_list():
 
 @app.route("/api/assets/<int:asset_id>/maintenance")
 def api_asset_maintenance(asset_id):
+    user = current_user()
     db = get_db()
     with db.get_conn() as conn:
+        asset_or_err = _get_visible_asset(conn, asset_id, user)
+        if not isinstance(asset_or_err, dict):
+            return asset_or_err
         rows = conn.execute(
             """SELECT mr.*, u.name as reporter_name
                FROM maintenance_record mr JOIN "user" u ON mr.reported_by = u.id
@@ -1470,6 +1619,26 @@ def _parse_id_list(ids, field_name="ids"):
         seen.add(x)
         result.append(x)
     return result, None
+
+
+def _get_visible_asset(conn, asset_id, user):
+    """检查资产可见性。返回 asset dict 或 (json_response, status_code)。
+    admin 可看全部（含回收站）；employee 只能看自己持有且未删除的；未登录 401。"""
+    row = conn.execute("SELECT * FROM asset WHERE id = ?", (asset_id,)).fetchone()
+    if not row:
+        return jsonify({"error": "资产不存在"}), 404
+    a = dict(row)
+    if not user:
+        return jsonify({"error": "未登录"}), 401
+    if user["role"] == "admin":
+        return a
+    if a.get("deleted_at"):
+        return jsonify({"error": "资产不存在"}), 404
+    emp = conn.execute("SELECT id FROM employee WHERE employee_id = ?",
+                       (user["employee_id"],)).fetchone()
+    if not emp or a.get("current_holder_id") != emp["id"]:
+        return jsonify({"error": "资产不存在"}), 404
+    return a
 
 
 def _get_asset_for_update(conn, asset_id, event_type):
@@ -1906,7 +2075,8 @@ def api_consumables_list():
             f"SELECT COUNT(*) as c FROM printer_consumable pc{where}", params
         ).fetchone()["c"]
         rows = conn.execute(
-            f"""SELECT pc.*, a.asset_tag as printer_tag, a.name as printer_name
+            f"""SELECT pc.*, a.asset_tag as printer_tag, a.name as printer_name,
+                       a.status as printer_status, a.deleted_at as printer_deleted_at
                 FROM printer_consumable pc
                 LEFT JOIN asset a ON pc.asset_id = a.id
                 {where} ORDER BY pc.created_at DESC""",
@@ -1989,7 +2159,8 @@ def api_consumables_create():
         log_activity(conn, user["id"], "create_consumable", "consumable", cid,
                      f"创建耗材 {name}")
         row = conn.execute(
-            """SELECT pc.*, a.asset_tag as printer_tag, a.name as printer_name
+            """SELECT pc.*, a.asset_tag as printer_tag, a.name as printer_name,
+                      a.status as printer_status, a.deleted_at as printer_deleted_at
                FROM printer_consumable pc
                LEFT JOIN asset a ON pc.asset_id = a.id
                WHERE pc.id = ?""", (cid,),
@@ -2005,7 +2176,8 @@ def api_consumables_get(consumable_id):
     db = get_db()
     with db.get_conn() as conn:
         row = conn.execute(
-            """SELECT pc.*, a.asset_tag as printer_tag, a.name as printer_name
+            """SELECT pc.*, a.asset_tag as printer_tag, a.name as printer_name,
+                      a.status as printer_status, a.deleted_at as printer_deleted_at
                FROM printer_consumable pc
                LEFT JOIN asset a ON pc.asset_id = a.id
                WHERE pc.id = ?""", (consumable_id,),
@@ -2083,7 +2255,8 @@ def api_consumables_update(consumable_id):
             log_activity(conn, user["id"], "update_consumable", "consumable", consumable_id,
                          f"更新字段: {', '.join(fields)}")
         row = conn.execute(
-            """SELECT pc.*, a.asset_tag as printer_tag, a.name as printer_name
+            """SELECT pc.*, a.asset_tag as printer_tag, a.name as printer_name,
+                      a.status as printer_status, a.deleted_at as printer_deleted_at
                FROM printer_consumable pc
                LEFT JOIN asset a ON pc.asset_id = a.id
                WHERE pc.id = ?""", (consumable_id,),
@@ -2132,7 +2305,8 @@ def api_consumables_adjust(consumable_id):
         log_activity(conn, user["id"], "adjust_stock", "consumable", consumable_id,
                      f"库存调整: {dict(row)['stock']} -> {new_stock} (delta={delta})")
         row = conn.execute(
-            """SELECT pc.*, a.asset_tag as printer_tag, a.name as printer_name
+            """SELECT pc.*, a.asset_tag as printer_tag, a.name as printer_name,
+                      a.status as printer_status, a.deleted_at as printer_deleted_at
                FROM printer_consumable pc
                LEFT JOIN asset a ON pc.asset_id = a.id
                WHERE pc.id = ?""", (consumable_id,),
@@ -2171,6 +2345,11 @@ def api_consumables_replace(consumable_id):
         consumable = dict(row)
         if data.get("use_stock") and consumable["stock"] <= 0:
             return jsonify({"error": "备用库存不足，不能从库存取用"}), 400
+
+        # Check if bound printer is operational
+        ok, err = _check_printer_operational(conn, consumable.get("asset_id"), "更换墨粉")
+        if not ok:
+            return err
 
         old_installed_at = consumable.get("installed_at")
         old_installed_date, error = _parse_iso_date(old_installed_at, "installed_at")
@@ -2312,7 +2491,7 @@ def api_cost_summary():
             FROM consumable_replacement
         """).fetchone()
 
-        # By printer
+        # By printer (exclude deleted/scrapped printers)
         by_printer_rows = conn.execute("""
             SELECT a.id as printer_id, a.name as printer_name, a.asset_tag,
                    COUNT(*) as replacement_count,
@@ -2321,6 +2500,7 @@ def api_cost_summary():
             FROM consumable_replacement cr
             JOIN printer_consumable pc ON cr.consumable_id = pc.id
             LEFT JOIN asset a ON pc.asset_id = a.id
+            WHERE a.id IS NULL OR (a.deleted_at IS NULL AND a.status != 'scrapped')
             GROUP BY a.id
             ORDER BY total_cost DESC
         """).fetchall()
@@ -2420,7 +2600,7 @@ def api_printers_consumables():
                    pc.unit as c_unit, pc.notes as c_notes
             FROM asset a
             LEFT JOIN printer_consumable pc ON pc.asset_id = a.id AND pc.type = 'toner'
-            WHERE a.category = 'printer' AND a.deleted_at IS NULL
+            WHERE a.category = 'printer' AND a.deleted_at IS NULL AND a.status != 'scrapped'
             ORDER BY a.id, pc.id
         """).fetchall()
 

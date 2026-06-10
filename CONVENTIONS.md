@@ -77,3 +77,20 @@
 - API 响应不暴露 `password_hash` 字段
 - 前端渲染用 `textContent` / `createElement`，不用 `innerHTML` 拼接
 - 公开扫码页只展示最小必要字段，不暴露持有人/部门等敏感数据
+
+## 软删除 / 回收站约定
+
+- 在册视图统一过滤 `deleted_at IS NULL`，回收站视图过滤 `deleted_at IS NOT NULL`
+- 软删除不是普通 status，而是在册/回收站两个视图层的分隔
+- 恢复时检查原持有人状态：inactive → 自动 in_stock + 清空持有人 + 关闭进行中维修记录
+- 已删除资产详情页只显示恢复/永久删除按钮，不显示常规操作
+
+## 打印机 / 耗材隔离约定
+
+- 报废打印机（`status = 'scrapped'`）：自动解绑耗材，不可再绑定，不出现在墨粉管理视图
+- 已删除打印机（`deleted_at IS NOT NULL`）：保留耗材关联（方便恢复），但不可新绑定、不出现在墨粉管理视图
+- 永久删除打印机：耗材不删除，解绑为未绑定库存并记 notes 和 activity_log
+- `_validate_printer_asset_id()` 检查打印机存在、为打印机、未删除、未报废
+- `_check_printer_operational()` 检查绑定打印机可运营（用于更换等操作）
+- 耗材响应标记不可用打印机：`printer_unavailable_reason = 'deleted' | 'scrapped'`，清除显示名/标签号
+- 分配/转移拒绝 `status != 'active'` 的员工

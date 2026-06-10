@@ -300,27 +300,6 @@
             timeline.appendChild(makeEl('p', 'text-muted', '暂无生命周期事件'));
         }
 
-        const labelTitle = makeEl('h3', 'drawer-section-title', '标签预览 (60×40mm)');
-        labelTitle.style.marginTop = '24px';
-        const labelBox = makeEl('div', 'label-preview-box');
-        const logoValue = window.__assetLabelLogo || '';
-        const labelFields = window.__assetLabelFields || ['name', 'serial_number'];
-        if (logoValue) {
-            labelBox.appendChild(createPhysicalLabel(asset, `/api/assets/${asset.id}/qr`, {compact: true, logoUrl: logoValue, fields: labelFields}));
-        } else {
-            labelBox.appendChild(createPhysicalLabel(asset, `/api/assets/${asset.id}/qr`, {compact: true, fields: labelFields}));
-            apiFetch('/api/settings/logo').then(logoData => {
-                window.__assetLabelLogo = logoData.logo || '';
-                if (window.__assetLabelLogo) renderDrawerContent(asset);
-            }).catch(() => {});
-        }
-        if (!window.__assetLabelFields) {
-            apiFetch('/api/settings/label').then(labelData => {
-                window.__assetLabelFields = labelData.fields || ['name', 'serial_number'];
-                renderDrawerContent(asset);
-            }).catch(() => {});
-        }
-
         body.append(header, banner, tools, infoTitle, metaGrid);
 
         if (asset.deleted_at) {

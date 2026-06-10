@@ -18,7 +18,7 @@ IT 固定资产管理追踪系统，面向 IT 管理员。
 - **技术栈**：Python Flask 3.1 + SQLite（原生 SQL）+ Jinja2 + 原生 JS + CSS
 - **无前端框架**：纯 vanilla JS，无构建步骤
 - **部署**：Flask 5000 端口 → Caddy 反向代理 9090 端口（your-server:9090）
-- **规模**：server.py ~2620 行，models.py ~476 行，202 个测试
+- **规模**：server.py ~3170 行，models.py ~492 行，295 个测试
 - **标签打印**：立象 Argox 热转印打印机 + 60×40mm 亚银纸，浏览器直接打印（Logo + 资产信息 + QR）
 
 ## 快速启动
@@ -46,8 +46,8 @@ python3 server.py                   # 启动 http://0.0.0.0:5000
 
 ```
 it-asset-manager/
-├── server.py              # Flask 应用：所有路由 + API（单文件，~2568 行）
-├── models.py              # 数据模型、常量、Schema SQL、工具函数
+├── server.py              # Flask 应用：所有路由 + API（单文件，~3170 行）
+├── models.py              # 数据模型、常量、Schema SQL、工具函数（~492 行）
 ├── init_db.py             # 数据库初始化 + 种子数据
 ├── requirements.txt       # Flask, gunicorn, qrcode, Pillow, pytest
 ├── gunicorn.conf.py       # Gunicorn 生产配置
@@ -80,7 +80,7 @@ it-asset-manager/
 │       ├── applications.html    # 我的申请
 │       └── application_form.html # 提交申请
 └── tests/
-    └── test_api.py        # 202+ 个自动化测试
+    └── test_api.py        # 295 个自动化测试
 ├── contrib/
 │   └── it-asset-manager.service  # systemd 服务文件
 ```
@@ -158,6 +158,10 @@ asset
 ├── purchase_price
 ├── warranty_date
 ├── notes
+├── deleted_at（软删除时间，NULL=在册）
+├── deleted_by → user
+├── delete_reason
+├── delete_snapshot（删除前状态快照 JSON）
 └── created_at / updated_at
 
 lifecycle_event                    maintenance_record
@@ -188,6 +192,15 @@ in_stock ──assign──> assigned ──return──> in_stock
 ```
 
 `scrapped` 是终态，不可逆。
+
+### 软删除 / 回收站
+
+`deleted_at IS NOT NULL` 的资产进入回收站，不是普通 status 值。在册视图（全部/在用/库存/维修中/已报废）都是 `deleted_at IS NULL`。回收站资产可以恢复或永久删除。
+
+- **软删除**（`DELETE /api/assets/<id>`）：非库存资产需填写原因，原状态/持有人等保存在 `delete_snapshot`
+- **恢复**（`POST /api/assets/<id>/restore`）：原持有人已停用时自动恢复为 in_stock 并关闭进行中维修记录
+- **永久删除**（`DELETE /api/assets/<id>/purge`）：需 `confirm: "DELETE"`，删除关联数据，打印机关联耗材自动解绑
+- **批量操作**：batch-delete、batch-restore、batch-purge 均支持
 
 ### 数据库升级
 
@@ -253,11 +266,14 @@ in_stock ──assign──> assigned ──return──> in_stock
 | `/my/applications` | employee | employee/applications.html |
 | `/my/applications/new` | employee | employee/application_form.html |
 
-### API 路由（62 条）
+### API 路由（92 条）
 
 **认证**：`POST /api/login`、`POST /api/logout`、`GET /api/me`
 
 **资产 CRUD**：`GET/POST /api/assets`、`GET/PUT/DELETE /api/assets/<id>`
+
+**软删除/回收站**：`POST /api/assets/batch-delete`、`POST /api/assets/<id>/restore`、`POST /api/assets/batch-restore`
+　　　　　　　　`DELETE /api/assets/<id>/purge`、`POST /api/assets/batch-purge`
 
 **生命周期**：`POST /api/assets/<id>/assign|return|transfer|maintenance|scrap`
 　　　　　`POST /api/assets/<id>/maintenance/<rid>/resolve`
@@ -362,6 +378,15 @@ const catLabels = {computer:'电脑', monitor:'显示器', ...};
 - 登录兼容明文和哈希密码（用 `$` in password_hash 判断类型）
 - `upgrade_db()` 自动迁移存量明文密码为哈希
 
+### 资产 API 鉴权规则
+
+- `GET /api/assets`：admin only（员工走 `/api/my/assets`，扫码走 `/api/public/asset*`）
+- `GET /api/assets/<id>`：未登录 401，admin 看所有（含回收站），employee 只看自己持有且未删除的
+- `GET /api/assets/<id>/events`、`GET /api/assets/<id>/maintenance`：同资产详情鉴权
+- `GET /api/maintenance`：admin only，排除已删除资产
+- `_get_visible_asset(conn, asset_id, user)` 是统一的资产可见性校验 helper
+- 分配/转移（`assign`/`transfer`）：拒绝 `status != 'active'` 的员工
+
 ### 标签打印
 
 - **物理标签**：60mm × 40mm 亚银纸，立象 Argox 热转印打印机，浏览器直接打印（不经过 BarTender）。
@@ -428,6 +453,17 @@ const catLabels = {computer:'电脑', monitor:'显示器', ...};
 - 更替只影响该耗材行，不影响同一打印机的其他耗材。
 - 列表/详情响应自动计算 `usage_days` 和 `estimated_daily_cost`（服务端 `_consumable_usage_fields()` 辅助函数）。
 - 前端 `consumables.html` 提供更换墨粉弹窗（更换日期、新价格、库存取用、原因、备注）和历史弹窗。
+
+### 打印机 / 耗材隔离规则
+
+- **已报废打印机**（`status = 'scrapped'）：报废时自动解绑所有耗材（`asset_id = NULL` + notes），不可再绑定耗材，不出现在墨粉管理视图
+- **已删除打印机**（`deleted_at IS NOT NULL`）：不可绑定耗材，不出现在墨粉管理视图，但保留耗材关联以便恢复
+- **永久删除打印机**：耗材不删除，自动解绑为未绑定库存（notes + activity_log 记录）
+- `_validate_printer_asset_id()` 验证打印机未删除且未报废
+- `_check_printer_operational()` 验证绑定的打印机可运营（用于耗材更换操作）
+- 耗材列表/详情中不可用打印机标记 `printer_unavailable_reason`（`'deleted'` 或 `'scrapped'`），并清除 `printer_tag`/`printer_name`
+- 恢复资产时：原持有人 inactive → 恢复为 in_stock + 清空持有人 + 自动关闭进行中维修记录
+- 详情页：已删除资产只显示"恢复"和"永久删除"按钮，不显示常规操作
 
 ---
 
