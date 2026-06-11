@@ -28,6 +28,8 @@
         <option value="approve_application">审批通过</option>
         <option value="reject_application">审批驳回</option>
         <option value="update_settings">修改配置</option>
+        <option value="auto_create_consumable">自动创建耗材</option>
+        <option value="auto_detach_consumable">自动解绑耗材</option>
     </select>
 </div>
 <div class="table-shell">
@@ -53,6 +55,7 @@ const actionNames = {
     maintenance_start:'送修', maintenance_end:'维修完成', scrap:'报废',
     label_print:'打印标签', export_csv:'导出CSV',
     approve_application:'审批通过', reject_application:'审批驳回', update_settings:'修改配置',
+    auto_create_consumable:'自动创建耗材', auto_detach_consumable:'自动解绑耗材',
 };
 
 async function loadActivity(page = 1) {

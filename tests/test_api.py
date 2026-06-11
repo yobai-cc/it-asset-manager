@@ -2713,6 +2713,168 @@ class TestPrinterTypeAndTonerScope:
         assert res.get_json()["category"] == "computer"
         assert res.get_json()["printer_type"] is None
 
+    # ---- 2b. Auto-sync consumable slots on printer_type change ----
+
+    def _create_printer(self, app_client, printer_type=None):
+        """Helper: create a printer asset, optionally with printer_type."""
+        payload = {"name": "HP LaserJet", "category": "printer"}
+        if printer_type:
+            payload["printer_type"] = printer_type
+        res = app_client.post("/api/assets", json=payload)
+        assert res.status_code == 201
+        return res.get_json()["id"]
+
+    def _get_printer_consumables(self, app_client, asset_id):
+        """Helper: get consumables for a printer from the aggregated view."""
+        res = app_client.get("/api/printers/consumables")
+        assert res.status_code == 200
+        printers = res.get_json()["printers"]
+        for p in printers:
+            if p["asset_id"] == asset_id:
+                return p["consumables"]
+        return None
+
+    def test_auto_sync_mono_creates_black_slot(self, app_client, db):
+        """设置 mono 时自动创建黑色槽位。"""
+        seed_test_data(db)
+        login_admin(app_client)
+        asset_id = self._create_printer(app_client)
+        res = app_client.put(f"/api/assets/{asset_id}", json={"printer_type": "mono"})
+        assert res.status_code == 200
+        slots = self._get_printer_consumables(app_client, asset_id)
+        assert slots is not None
+        assert len(slots) == 1
+        assert slots[0]["color"] == "black"
+
+    def test_auto_sync_color_creates_four_slots(self, app_client, db):
+        """设置 color 时自动创建黑/青/品/黄四色槽位。"""
+        seed_test_data(db)
+        login_admin(app_client)
+        asset_id = self._create_printer(app_client)
+        res = app_client.put(f"/api/assets/{asset_id}", json={"printer_type": "color"})
+        assert res.status_code == 200
+        slots = self._get_printer_consumables(app_client, asset_id)
+        assert slots is not None
+        assert len(slots) == 4
+        colors = sorted(s["color"] for s in slots)
+        assert colors == ["black", "cyan", "magenta", "yellow"]
+
+    def test_auto_sync_idempotent(self, app_client, db):
+        """重复设置同一类型不重复创建槽位。"""
+        seed_test_data(db)
+        login_admin(app_client)
+        asset_id = self._create_printer(app_client)
+        app_client.put(f"/api/assets/{asset_id}", json={"printer_type": "mono"})
+        app_client.put(f"/api/assets/{asset_id}", json={"printer_type": "mono"})
+        slots = self._get_printer_consumables(app_client, asset_id)
+        assert slots is not None
+        assert len(slots) == 1
+
+    def test_auto_sync_upgrade_mono_to_color_preserves_black(self, app_client, db):
+        """mono→color 升级时保留黑色槽位数据，补齐 CMY。"""
+        seed_test_data(db)
+        login_admin(app_client)
+        asset_id = self._create_printer(app_client)
+        app_client.put(f"/api/assets/{asset_id}", json={"printer_type": "mono"})
+        # Manually update the black slot to set stock=5
+        slots = self._get_printer_consumables(app_client, asset_id)
+        black_id = slots[0]["id"]
+        app_client.put(f"/api/consumables/{black_id}", json={
+            "color": "black", "stock": 5, "threshold": 1,
+            "name": "HP LaserJet - 黑色",
+        })
+        # Upgrade to color
+        app_client.put(f"/api/assets/{asset_id}", json={"printer_type": "color"})
+        slots = self._get_printer_consumables(app_client, asset_id)
+        assert len(slots) == 4
+        black = next(s for s in slots if s["color"] == "black")
+        assert black["stock"] == 5
+        assert black["threshold"] == 1
+        cmy = [s for s in slots if s["color"] != "black"]
+        assert all(s["stock"] == 0 for s in cmy)
+
+    def test_auto_sync_downgrade_color_to_mono_detaches_cmy(self, app_client, db):
+        """color→mono 降级时打印机只保留黑色，CMY 拆回未绑定库存。"""
+        seed_test_data(db)
+        login_admin(app_client)
+        asset_id = self._create_printer(app_client)
+        app_client.put(f"/api/assets/{asset_id}", json={"printer_type": "color"})
+        assert len(self._get_printer_consumables(app_client, asset_id)) == 4
+        with db.get_conn() as conn:
+            cyan = conn.execute(
+                "SELECT id FROM printer_consumable WHERE asset_id = ? AND color = 'cyan'",
+                (asset_id,),
+            ).fetchone()
+            cyan_id = cyan["id"]
+            conn.execute(
+                """INSERT INTO consumable_replacement
+                   (consumable_id, asset_id_snapshot, consumable_name_snapshot,
+                    old_installed_at, replaced_at, usage_days, price, daily_cost,
+                    new_installed_at, new_price, reason, notes)
+                   VALUES (?, ?, 'cyan slot', '2026-01-01', '2026-01-11', 10, 100, 10,
+                           '2026-01-11', 120, 'test', 'keep history')""",
+                (cyan_id, asset_id),
+            )
+
+        app_client.put(f"/api/assets/{asset_id}", json={"printer_type": "mono"})
+        slots = self._get_printer_consumables(app_client, asset_id)
+        assert len(slots) == 1
+        assert slots[0]["color"] == "black"
+        with db.get_conn() as conn:
+            detached = conn.execute(
+                """SELECT id, asset_id, notes FROM printer_consumable
+                   WHERE id = ?""",
+                (cyan_id,),
+            ).fetchone()
+            assert detached is not None
+            assert detached["asset_id"] is None
+            assert "打印机类型变更" in detached["notes"]
+            history_count = conn.execute(
+                "SELECT COUNT(*) as c FROM consumable_replacement WHERE consumable_id = ?",
+                (cyan_id,),
+            ).fetchone()["c"]
+            assert history_count == 1
+
+    def test_auto_sync_logged_in_activity(self, app_client, db):
+        """自动创建/解绑槽位写入 activity_log。"""
+        seed_test_data(db)
+        login_admin(app_client)
+        asset_id = self._create_printer(app_client)
+        app_client.put(f"/api/assets/{asset_id}", json={"printer_type": "color"})
+        # Downgrade: should log auto_detach for CMY
+        app_client.put(f"/api/assets/{asset_id}", json={"printer_type": "mono"})
+        res = app_client.get("/api/activity")
+        actions = [a["action"] for a in res.get_json()["logs"]]
+        assert "auto_create_consumable" in actions
+        assert "auto_detach_consumable" in actions
+
+    def test_auto_sync_on_create_printer_with_type(self, app_client, db):
+        """创建打印机时直接带 printer_type 也自动创建槽位。"""
+        seed_test_data(db)
+        login_admin(app_client)
+        asset_id = self._create_printer(app_client, printer_type="color")
+        slots = self._get_printer_consumables(app_client, asset_id)
+        assert slots is not None
+        assert len(slots) == 4
+
+    def test_auto_sync_slot_default_values(self, app_client, db):
+        """自动创建的槽位默认值正确。"""
+        seed_test_data(db)
+        login_admin(app_client)
+        asset_id = self._create_printer(app_client)
+        app_client.put(f"/api/assets/{asset_id}", json={"printer_type": "mono"})
+        res = app_client.get("/api/consumables")
+        consumables = res.get_json()["consumables"]
+        black = next(c for c in consumables if c["color"] == "black")
+        assert black["type"] == "toner"
+        assert black["stock"] == 0
+        assert black["threshold"] == 0
+        assert black["model"] is None
+        assert black["current_price"] is None
+        assert black["installed_at"] is None
+        assert "HP LaserJet" in black["name"]
+        assert "黑色" in black["name"]
+
     # ---- 3. Toner-only constraints: type fixed to toner, model enum ----
 
     def test_create_consumable_defaults_type_to_toner(self, app_client, db):
@@ -3981,20 +4143,18 @@ class TestScrapPrinterDetachesConsumables:
             "name": "HP Printer", "category": "printer", "printer_type": "color"
         })
         aid = res.get_json()["id"]
-        cids = []
-        for color in ["black", "cyan", "magenta", "yellow"][:n]:
-            c_res = app_client.post("/api/consumables", json={
-                "name": f"HP - {color}", "type": "toner", "stock": 3,
-                "asset_id": aid, "color": color, "model": "原装"
-            })
-            cids.append(c_res.get_json()["id"])
+        # Auto-sync creates 4 slots (black, cyan, magenta, yellow)
+        pr = app_client.get("/api/printers/consumables")
+        printer = next(p for p in pr.get_json()["printers"] if p["asset_id"] == aid)
+        cids = [s["id"] for s in printer["consumables"][:n]]
         return aid, cids
 
     def test_scrap_printer_detaches_consumables(self, app_client, db):
         aid, cids = self._setup_printer_with_consumables(app_client, db, 2)
         res = app_client.post(f"/api/assets/{aid}/scrap", json={})
         assert res.status_code == 200
-        assert res.get_json()["detached_consumables"] == 2
+        # All 4 auto-created slots get detached
+        assert res.get_json()["detached_consumables"] == 4
         with db.get_conn() as conn:
             for cid in cids:
                 row = conn.execute("SELECT asset_id, notes FROM printer_consumable WHERE id = ?", (cid,)).fetchone()
@@ -4070,10 +4230,7 @@ class TestSoftDeletePrinterRestore:
             "name": "HP Printer", "category": "printer", "printer_type": "mono"
         })
         aid = res.get_json()["id"]
-        app_client.post("/api/consumables", json={
-            "name": "Toner", "type": "toner", "stock": 5,
-            "asset_id": aid, "color": "black", "model": "原装"
-        })
+        # Auto-sync already created a black slot for mono printer
         app_client.delete(f"/api/assets/{aid}")
         with db.get_conn() as conn:
             row = conn.execute("SELECT asset_id FROM printer_consumable WHERE asset_id = ?", (aid,)).fetchone()

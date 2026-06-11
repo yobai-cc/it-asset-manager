@@ -18,7 +18,7 @@ IT 固定资产管理追踪系统，面向 IT 管理员。
 - **技术栈**：Python Flask 3.1 + SQLite（原生 SQL）+ Jinja2 + 原生 JS + CSS
 - **无前端框架**：纯 vanilla JS，无构建步骤
 - **部署**：Flask 5000 端口 → Caddy 反向代理 9090 端口（your-server:9090）
-- **规模**：server.py ~3170 行，models.py ~492 行，295 个测试
+- **规模**：server.py ~3180 行，models.py ~492 行，303 个测试
 - **标签打印**：立象 Argox 热转印打印机 + 60×40mm 亚银纸，浏览器直接打印（Logo + 资产信息 + QR）
 
 ## 快速启动
@@ -80,7 +80,7 @@ it-asset-manager/
 │       ├── applications.html    # 我的申请
 │       └── application_form.html # 提交申请
 └── tests/
-    └── test_api.py        # 295 个自动化测试
+    └── test_api.py        # 303 个自动化测试
 ├── contrib/
 │   └── it-asset-manager.service  # systemd 服务文件
 ```
@@ -392,8 +392,8 @@ const catLabels = {computer:'电脑', monitor:'显示器', ...};
 - **物理标签**：60mm × 40mm 亚银纸，立象 Argox 热转印打印机，浏览器直接打印（不经过 BarTender）。
 - **打印尺寸**：`@page { size: 60mm 40mm; margin: 0 }`，打印态标签盒为 57.6×37.6mm + 四周 1.1mm 安全边距，外部占用 59.8×39.8mm，避免浏览器/驱动舍入误差导致空白第二页。
 - **单位体系**：标签内所有元素（Logo、字体、QR 码、间距）统一使用 mm 单位，不混用 px，确保与纸张物理尺寸精确对应。
-- 当前标签设计包含 Logo（11mm）、资产名称（3.8mm 字号）/标签号（2.8mm）/可选字段、数字编号（7mm 字号）、QR 码（20mm）。
-- 固定打印项：资产标签号、数字编号、QR。辅助字段默认 `name` + `serial_number`，最多 3 个；`holder`/`location` 是易过期动态字段，设置页作为高级字段提示，优先建议扫码查看实时信息。
+- 当前标签设计为左右分栏固定布局：左上 Logo、分类（可选位置）、资产名称、品牌/型号、资产编号；右上 20mm QR 码和“扫码查看”提示。
+- 固定打印项：资产名称、品牌/型号、资产编号、QR。当前设置页只暴露 `location` 开关；关闭时单标签、批量标签、设置页预览、资产抽屉预览都不得显示位置。
 - 打印页、设置页和预览文案保持”60×40mm QR 标签”的一致表述。
 - Logo 存储在 `static/uploads/company_logo.*`，路径记录在 app_config
 - Logo 上传接口是 `POST /api/settings/logo`，保存目录必须用 `os.path.abspath(__file__)` 推导项目根路径；这里曾因 `_os.abspath` 拼写错误导致上传失败。
@@ -443,6 +443,8 @@ const catLabels = {computer:'电脑', monitor:'显示器', ...};
 - **设计定位**：轻量 slot，专用于打印机墨粉（toner）的当前状态跟踪和更替历史记录。
 - **墨粉范围约束**：`type` 固定为 `toner`，API 拒绝其他类型（ink/drum/paper/ribbon/other）；`model` 限定为 `原装` 或 `国产`。
 - **打印机类型**：`asset.printer_type` 字段（`mono`/`color`）决定允许的墨粉颜色：`mono` 仅允许黑色，`color` 允许黑/青/品/黄四色。
+- 创建打印机或修改 `printer_type` 时会自动同步 toner slot：`mono` 确保黑色槽位，`color` 确保黑/青/品/黄四色槽位。
+- `color → mono` 降级时，CMY 槽位必须解绑为未绑定库存（`asset_id = NULL` + notes + activity_log），不能删除行；库存、当前价格、安装日期和 `consumable_replacement` 历史必须保留。
 - `/consumables` 和 `GET /api/printers/consumables` 以 `asset.category='printer'` 为主数据源：普通打印机资产即使尚未配置耗材 slot，也会出现在墨粉管理；标签打印机会按 `_is_label_printer()` 过滤。
 - 未配置 slot 的打印机返回 `printer_type='unconfigured'`、`consumables=[]`，前端显示待配置状态，并提供为当前打印机新增墨粉的入口。
 - 一台打印机可有多个 `printer_consumable` 行（黑/青/品/黄各一支墨粉等），各自独立跟踪。
@@ -496,9 +498,9 @@ const catLabels = {computer:'电脑', monitor:'显示器', ...};
 - `templates/admin/label.html`（单标签）和 `assets.html` 中的 `batchPrintLabels()` 必须保持同步
 - 两者都从 `/api/settings/label` 和 `/api/settings/logo` 读取配置
 - 设置页预览和资产抽屉预览复用 `base.html` 的 `createPhysicalLabel(asset, qrSrc, options)`；若上传了 Logo，传 `options.logoUrl`；字段配置通过 `options.fields` 传入
-- **布局结构**：`.label-header`（Logo 11mm + `.label-meta-tags` 文字区）+ `.label-footer-zone`（数字编号 7mm + QR 20mm）
+- **布局结构**：`.label-logo`、`.label-meta-row`、`.label-name`、`.label-brand`、`.label-tag`、`.label-qr`、`.label-qr-hint` 使用绝对定位；批量打印页使用对应 `lc-*` 类保持同步。
 - **打印时标签缩小为 57.6×37.6mm**：`@media print` 中 `.physical-label`/`.label-card` 设为 `width: 57.6mm; height: 37.6mm; margin: 1.1mm`，四周安全边距防止溢出和空白第二页
-- 如需更多字段，追加到 `.label-meta-tags`/`.label-text` 内；辅助字段必须受 `LABEL_FIELDS_MAX=3` 限制，保持内容不溢出
+- 如需重新开放更多辅助字段，必须同时更新设置页 UI、`createPhysicalLabel()`、单标签页和批量标签页，并继续通过 `options.fields`/`/api/settings/label` 控制显示，保持内容不溢出。
 - **XSS 防护**：批量标签 `buildPrintLabel()` 用 `escapePrintText()` 转义资产字段；单标签 `label.html` 用 `textContent` 写入
 
 ### 用户管理

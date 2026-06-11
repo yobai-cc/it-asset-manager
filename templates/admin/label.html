@@ -21,65 +21,84 @@
         border-radius: 6px; margin-top: 12px; line-height: 1.6;
     }
 
-    /* ========== 标签主体 60×40mm ========== */
+    /* ========== 标签主体 60×40mm — 左右分栏 ========== */
     .physical-label {
-        width: 60mm;
-        height: 40mm;
-        padding: 2mm;
-        box-sizing: border-box;
+        width: 60mm; height: 40mm;
+        position: relative;
         background: #fff;
-        display: flex;
-        flex-direction: column;
-        justify-content: space-between;
+        overflow: hidden;
         line-height: 1.15;
         color: #0f172a;
-        position: relative;
-        overflow: hidden;
     }
-    /* 预览模式下加虚线框 */
     .label-screen-border {
-        border: 1px dashed #94a3b8;
-        border-radius: 4px;
-        padding: 0;
-        display: inline-block;
-        background: #fff;
+        border: 1px dashed #94a3b8; border-radius: 4px;
+        padding: 0; display: inline-block; background: #fff;
     }
     .label-screen-border .physical-label { border: none; }
 
-    /* 上半区：Logo + 文字 */
-    .label-top { display: flex; align-items: center; gap: 2mm; min-width: 0; }
-    .label-logo-box {
-        width: 11mm; height: 11mm;
-        border: 0.3mm solid #e2e8f0; border-radius: 1mm;
-        display: flex; align-items: center; justify-content: center;
-        font-size: 4mm; font-weight: 900; color: #2563eb;
-        flex-shrink: 0; overflow: hidden;
+    /* --- Logo — top-left --- */
+    .label-logo {
+        position: absolute; left: 3mm; top: 3mm;
+        max-width: 30mm; max-height: 7mm;
+        overflow: hidden;
     }
-    .label-logo-box img { width: 100%; height: 100%; object-fit: contain; }
-    .label-text { min-width: 0; overflow: hidden; flex: 1; }
-    .label-text .name {
-        font-size: 3.8mm; font-weight: 800;
-        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    .label-logo img { max-width: 100%; max-height: 7mm; object-fit: contain; display: block; }
+    .label-logo-fallback {
+        font-size: 5.5mm; font-weight: 900; color: #2563eb; line-height: 1;
     }
-    .label-text .tag {
-        font-size: 2.8mm; font-weight: 600; color: #2563eb;
-        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    /* --- 分类 + 位置 row --- */
+    .label-meta-row {
+        position: absolute; left: 3mm; top: 13mm;
+        display: flex; align-items: center; gap: 1.5mm;
     }
-    .label-text .field {
-        font-size: 2.5mm; color: #64748b;
-        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-        line-height: 1.3;
-    }
-
-    /* 下半区：数字编号 + QR 码 */
-    .label-bottom { display: flex; align-items: flex-end; justify-content: space-between; }
-    .label-number { font-size: 7mm; font-weight: 900; letter-spacing: 0.2mm; line-height: 1; }
-    .label-qr-wrap {
-        width: 20mm; height: 20mm;
-        border: 0.3mm solid #e2e8f0; padding: 0.5mm;
+    .label-category {
+        display: inline-block;
+        font-size: 1.8mm; font-weight: 600; color: #2563eb;
+        border: 0.3mm solid #2563eb; border-radius: 1mm;
+        padding: 0.3mm 1.2mm; line-height: 1.3;
         flex-shrink: 0;
     }
-    .label-qr-wrap img { width: 100%; height: 100%; object-fit: contain; }
+    .label-location {
+        font-size: 2.2mm; color: #64748b;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        max-width: 18mm;
+    }
+    .label-location:empty { display: none; }
+    /* --- 左侧文字 --- */
+    .label-name {
+        position: absolute; left: 3mm; top: 18.5mm;
+        width: 32mm;
+        font-size: 3mm; font-weight: 600;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .label-brand {
+        position: absolute; left: 3mm; top: 24mm;
+        width: 32mm;
+        font-size: 2.5mm; color: #64748b;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    /* --- 资产编号 — full width below QR zone --- */
+    .label-tag {
+        position: absolute; left: 3mm; top: 30mm;
+        width: 54mm;
+        font-size: 4mm; font-weight: 800; color: #0f172a;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        letter-spacing: 0.1mm;
+    }
+
+    /* --- 右上角 QR (20×20mm) --- */
+    .label-qr {
+        position: absolute; right: 3mm; top: 3mm;
+        width: 20mm; height: 20mm;
+        border: 0.3mm solid #e2e8f0; padding: 0.5mm;
+    }
+    .label-qr img { width: 100%; height: 100%; object-fit: contain; display: block; }
+    .label-qr-hint {
+        position: absolute; right: 3mm; top: 23.5mm;
+        width: 20mm;
+        font-size: 1.6mm; color: #94a3b8;
+        text-align: center;
+    }
 
     /* 尺寸标注（仅预览） */
     .dim-indicator {
@@ -96,11 +115,10 @@
         .label-screen-border { display: contents; }
         .dim-indicator { display: none !important; }
         .physical-label {
-            width: 57.6mm;
-            height: 37.6mm;
-            margin: 1.1mm;
-            padding: 2mm;
-            border: none;
+            width: 57.6mm; height: 37.6mm;
+            margin: 1.1mm; border: none;
+            transform-origin: top left;
+            transform: scale(0.96);
         }
         @page { size: 60mm 40mm; margin: 0; }
     }
@@ -128,63 +146,72 @@
 
     <script>
     const assetId = {{ asset_id }};
-    const fieldLabels = {name:'资产名称',serial_number:'序列号',holder:'持有人',location:'位置',brand:'品牌',model:'型号'};
+    var catNames = {
+        computer:'电脑', monitor:'显示器', phone:'手机', tablet:'平板',
+        printer:'打印机', server:'服务器', network:'网络设备', firewall:'防火墙', switch:'交换机'
+    };
 
     function el(tag, cls, text) {
-        const n = document.createElement(tag);
+        var n = document.createElement(tag);
         if (cls) n.className = cls;
         if (text !== undefined && text !== null) n.textContent = text;
         return n;
     }
 
     function buildLabel(asset, fields, logoUrl) {
-        const label = document.getElementById('labelContent');
+        fields = Array.isArray(fields) ? fields : [];
+        var showLocation = fields.includes('location');
+        var label = document.getElementById('labelContent');
 
-        /* 上半区 */
-        const top = el('div', 'label-top');
-        const logoBox = el('div', 'label-logo-box');
+        /* Logo */
+        var logoEl = el('div', 'label-logo');
         if (logoUrl) {
-            const img = document.createElement('img');
+            var img = document.createElement('img');
             img.src = logoUrl; img.alt = 'Logo';
-            logoBox.appendChild(img);
+            logoEl.appendChild(img);
         } else {
-            logoBox.textContent = 'IT';
+            logoEl.appendChild(el('span', 'label-logo-fallback', 'IT'));
         }
-        const textWrap = el('div', 'label-text');
-        if (fields.includes('name')) {
-            textWrap.appendChild(el('div', 'name', asset.name || '-'));
+
+        /* 固定文字行 */
+        var nameEl = el('div', 'label-name', asset.name || '-');
+
+        var brandParts = [asset.brand, asset.model].filter(Boolean).join(' / ') || '-';
+        var brandEl = el('div', 'label-brand', brandParts);
+
+        var tagEl = el('div', 'label-tag', asset.asset_tag || '-');
+
+        var catLabel = catNames[asset.category] || asset.category || '';
+        var catEl = el('div', 'label-category', catLabel);
+        var metaRow = el('div', 'label-meta-row');
+        metaRow.appendChild(catEl);
+        if (showLocation && asset.location) {
+            var locationEl = el('span', 'label-location', asset.location);
+            metaRow.appendChild(locationEl);
         }
-        textWrap.appendChild(el('div', 'tag', asset.asset_tag || '-'));
-        fields.forEach(f => {
-            if (f === 'name') return;
-            const v = f === 'holder' ? asset.holder_name : asset[f];
-            if (!v) return;
-            const label = f === 'serial_number' ? 'SN' : (fieldLabels[f] || f);
-            textWrap.appendChild(el('div', 'field', label + ': ' + v));
-        });
-        top.append(logoBox, textWrap);
 
-        /* 下半区 */
-        const bottom = el('div', 'label-bottom');
-        const num = String(asset.asset_tag || asset.id || '').replace(/\D/g, '').slice(-7) || String(asset.id || '-');
-        bottom.appendChild(el('div', 'label-number', num));
-        const qrWrap = el('div', 'label-qr-wrap');
-        const qr = document.createElement('img');
-        qr.src = '/api/assets/' + assetId + '/qr';
-        qr.alt = 'QR';
-        qrWrap.appendChild(qr);
-        bottom.appendChild(qrWrap);
+        /* QR 码 */
+        var qrEl = el('div', 'label-qr');
+        var qrImg = document.createElement('img');
+        qrImg.src = '/api/assets/' + assetId + '/qr';
+        qrImg.alt = 'QR';
+        qrEl.appendChild(qrImg);
 
-        label.append(top, bottom);
+        var qrHint = el('div', 'label-qr-hint', '扫码查看');
+
+        label.append(logoEl, metaRow, nameEl, brandEl, tagEl, qrEl, qrHint);
         return label;
     }
 
     Promise.all([
-        fetch('/api/assets/' + assetId).then(r => r.json()),
-        fetch('/api/settings/label').then(r => r.json()),
-        fetch('/api/settings/logo').then(r => r.json()),
-    ]).then(([asset, settings, logoData]) => {
-        buildLabel(asset, settings.fields || ['name', 'serial_number'], logoData.logo || '');
+        fetch('/api/assets/' + assetId).then(function(r) { return r.json(); }),
+        fetch('/api/settings/label').then(function(r) { return r.json(); }),
+        fetch('/api/settings/logo').then(function(r) { return r.json(); }),
+    ]).then(function(args) {
+        var asset = args[0];
+        var settings = args[1];
+        var logoData = args[2];
+        buildLabel(asset, settings.fields || [], logoData.logo || '');
     });
     </script>
 </body>

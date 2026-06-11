@@ -161,46 +161,47 @@
     }
 
     function createPhysicalLabel(asset, qrSrc, options = {}) {
-        const fields = Array.isArray(options.fields) ? options.fields : ['name', 'serial_number'];
-        const fieldLabels = {name:'资产名称',serial_number:'序列号',brand:'品牌',model:'型号',holder:'持有人',location:'位置'};
-        const label = makeEl('div', `physical-label-preview${options.compact ? ' is-compact' : ''}`);
-        const header = makeEl('div', 'label-header');
-        const logo = makeEl('div', 'label-logo-placeholder');
+        var fields = Array.isArray(options.fields) ? options.fields : [];
+        var showLocation = fields.includes('location');
+        var catNames = {computer:'电脑',monitor:'显示器',phone:'手机',tablet:'平板',printer:'打印机',server:'服务器',network:'网络设备',firewall:'防火墙',switch:'交换机'};
+        var label = makeEl('div', 'physical-label-preview' + (options.compact ? ' is-compact' : ''));
+
+        /* Logo */
+        var logoEl = makeEl('div', 'label-logo');
         if (options.logoUrl) {
-            const logoImg = document.createElement('img');
+            var logoImg = document.createElement('img');
             logoImg.src = options.logoUrl;
             logoImg.alt = 'Logo';
             logoImg.className = 'label-logo-image';
-            logo.appendChild(logoImg);
+            logoEl.appendChild(logoImg);
         } else {
-            logo.textContent = 'IT';
+            logoEl.appendChild(makeEl('span', 'label-logo-fallback', 'IT'));
         }
-        const meta = makeEl('div', 'label-meta-tags');
-        if (fields.includes('name')) {
-            meta.appendChild(makeEl('div', 'label-title-text', asset.name || '-'));
+
+        /* 固定文字 */
+        var nameEl = makeEl('div', 'label-name', asset.name || '-');
+        var brandParts = [asset.brand, asset.model].filter(Boolean).join(' / ') || '-';
+        var brandEl = makeEl('div', 'label-brand', brandParts);
+        var tagEl = makeEl('div', 'label-tag', asset.asset_tag || '-');
+        var catLabel = catNames[asset.category] || asset.category || '';
+        var catEl = makeEl('span', 'label-category', catLabel);
+        var metaRow = makeEl('div', 'label-meta-row');
+        metaRow.appendChild(catEl);
+        if (showLocation && asset.location) {
+            var locationEl = makeEl('span', 'label-location', asset.location);
+            metaRow.appendChild(locationEl);
         }
-        meta.appendChild(makeEl('div', 'label-tag-sn', asset.asset_tag || '-'));
-        fields.forEach(field => {
-            if (field === 'name') return;
-            const value = field === 'holder' ? asset.holder_name : asset[field];
-            if (!value) return;
-            const labelText = field === 'serial_number' ? 'SN' : (fieldLabels[field] || field);
-            meta.appendChild(makeEl('div', 'label-tag-sn sn-field', `${labelText}: ${value}`));
-        });
-        header.append(logo, meta);
 
-        const footer = makeEl('div', 'label-footer-zone');
-        const numeric = String(asset.asset_tag || asset.id || '').replace(/\D/g, '').slice(-7) || String(asset.id || '-');
-        footer.appendChild(makeEl('div', 'numeric-tag-id', numeric));
-        const qrWrap = makeEl('div', 'qr-code-wrapper');
-        const qr = document.createElement('img');
-        qr.src = qrSrc;
-        qr.alt = 'QR';
-        qr.className = 'qr-image';
-        qrWrap.appendChild(qr);
-        footer.appendChild(qrWrap);
+        /* QR */
+        var qrEl = makeEl('div', 'label-qr');
+        var qrImg = document.createElement('img');
+        qrImg.src = qrSrc;
+        qrImg.alt = 'QR';
+        qrImg.className = 'qr-image';
+        qrEl.appendChild(qrImg);
+        var qrHint = makeEl('div', 'label-qr-hint', '扫码查看');
 
-        label.append(header, footer);
+        label.append(logoEl, metaRow, nameEl, brandEl, tagEl, qrEl, qrHint);
         if (options.dimensions !== false) {
             label.appendChild(makeEl('div', 'dim-indicator height-indicator', '40mm'));
             label.appendChild(makeEl('div', 'dim-indicator width-indicator', '60mm'));

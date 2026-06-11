@@ -721,6 +721,8 @@ def api_assets_create():
             (asset_id, user["id"], data.get("notes")),
         )
         log_activity(conn, user["id"], "create_asset", "asset", asset_id, f"创建资产 {asset_tag}")
+        if printer_type:
+            _sync_printer_consumables(conn, asset_id, printer_type, user["id"], data["name"])
         row = conn.execute("SELECT * FROM asset WHERE id = ?", (asset_id,)).fetchone()
     return jsonify(_asset_dict(row)), 201
 
@@ -809,6 +811,11 @@ def api_assets_update(asset_id):
                          params + [asset_id])
             log_activity(conn, user["id"], "update_asset", "asset", asset_id,
                          f"更新字段: {', '.join(fields)}")
+        # Auto-sync consumable slots when printer_type changes
+        if "printer_type" in data and data["printer_type"] is not None:
+            updated = conn.execute("SELECT name FROM asset WHERE id = ?", (asset_id,)).fetchone()
+            pname = updated["name"] if updated else "未知打印机"
+            _sync_printer_consumables(conn, asset_id, data["printer_type"], user["id"], pname)
         row = conn.execute("SELECT * FROM asset WHERE id = ?", (asset_id,)).fetchone()
     return jsonify(_asset_dict(row))
 
@@ -2531,6 +2538,61 @@ def api_cost_summary():
 _LABEL_PRINTER_KEYWORDS = ("label", "标签", "zebra", "argox", "tsc", "godex", "saturn", "postek", "cab", "honeywell", "datamax", "sato", "intermec", "pronto")
 
 _TONER_COLOR_LABELS = {"black": "黑色", "cyan": "青色", "magenta": "品红", "yellow": "黄色"}
+
+_MONO_COLORS = {"black"}
+_COLOR_COLORS = {"black", "cyan", "magenta", "yellow"}
+
+
+def _sync_printer_consumables(conn, asset_id, new_printer_type, user_id, printer_name):
+    """Auto-create/detach toner slots to match the printer type.
+
+    - mono: ensure a black slot is attached
+    - color: ensure black + cyan + magenta + yellow slots are attached
+    - Idempotent: no-op if slots already match
+    """
+    target = _MONO_COLORS if new_printer_type == "mono" else _COLOR_COLORS
+
+    # Existing toner slots for this printer
+    rows = conn.execute(
+        "SELECT id, name, color FROM printer_consumable WHERE asset_id = ? AND type = 'toner'",
+        (asset_id,),
+    ).fetchall()
+    existing = {}
+    for r in rows:
+        existing.setdefault(r["color"], []).append(r["id"])
+
+    existing_colors = set(existing.keys())
+    to_create = target - existing_colors
+    to_detach = existing_colors - target
+
+    # Create missing slots
+    for color in sorted(to_create):
+        color_label = _TONER_COLOR_LABELS.get(color, color)
+        name = f"{printer_name} - {color_label}"
+        cursor = conn.execute(
+            """INSERT INTO printer_consumable
+               (name, type, stock, threshold, asset_id, unit, color, model,
+                current_price, installed_at, notes)
+               VALUES (?, 'toner', 0, 0, ?, '个', ?, NULL, NULL, NULL, NULL)""",
+            (name, asset_id, color),
+        )
+        log_activity(conn, user_id, "auto_create_consumable", "consumable",
+                     cursor.lastrowid, f"自动创建耗材 {name}")
+
+    # Detach extra slots (e.g. color->mono downgrade) instead of deleting rows,
+    # because stock values and replacement history belong to the consumable slot.
+    for color in sorted(to_detach, key=lambda c: "" if c is None else str(c)):
+        for cid in existing.get(color, []):
+            r = conn.execute("SELECT name FROM printer_consumable WHERE id = ?", (cid,)).fetchone()
+            cname = r["name"] if r else "未知耗材"
+            conn.execute(
+                """UPDATE printer_consumable SET asset_id = NULL,
+                   notes = COALESCE(notes || '\n', '') || '打印机类型变更，自动拆回未绑定库存'
+                   WHERE id = ?""",
+                (cid,),
+            )
+            log_activity(conn, user_id, "auto_detach_consumable", "consumable", cid,
+                         f"自动解绑耗材 {cname}（打印机类型变更）")
 
 
 def _is_label_printer(name, brand, model):

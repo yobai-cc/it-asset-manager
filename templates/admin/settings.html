@@ -24,12 +24,23 @@
 </div>
 
 <div class="form-card" style="margin-bottom:24px;">
-    <h3>标签打印字段</h3>
-    <p class="text-muted" style="margin-bottom:12px;">标签号、数字编号和 QR 二维码为固定项。辅助字段最多选择 <strong id="maxFieldCount">3</strong> 个，推荐只放不易变化的识别信息：</p>
-    <div id="fixedFieldList" class="text-muted" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;"></div>
-    <div id="fieldCheckboxes"></div>
-    <p id="fieldLimitHint" class="text-muted" style="margin-top:8px;font-size:12px;"></p>
-    <button class="btn btn-primary" onclick="saveLabelFields()" style="margin-top:12px;">保存标签配置</button>
+    <h3>标签打印配置</h3>
+    <p class="text-muted" style="margin-bottom:12px;">标签固定显示资产名称、品牌/型号、资产编号和 QR 二维码。以下为固定项：</p>
+    <div class="text-muted" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
+        <span style="border:1px solid var(--color-border);border-radius:999px;padding:4px 10px;background:var(--color-bg-main)">资产名称</span>
+        <span style="border:1px solid var(--color-border);border-radius:999px;padding:4px 10px;background:var(--color-bg-main)">品牌/型号</span>
+        <span style="border:1px solid var(--color-border);border-radius:999px;padding:4px 10px;background:var(--color-bg-main)">资产编号</span>
+        <span style="border:1px solid var(--color-border);border-radius:999px;padding:4px 10px;background:var(--color-bg-main)">QR 二维码</span>
+    </div>
+    <p class="text-muted" style="margin-bottom:12px;">可选字段：</p>
+    <div style="margin-bottom:12px;">
+        <label style="display:flex;align-items:center;gap:8px;">
+            <input type="checkbox" id="showLocation">
+            <span>位置</span>
+            <span class="text-muted" style="font-size:12px;">（显示在标签分类旁边）</span>
+        </label>
+    </div>
+    <button class="btn btn-primary" onclick="saveLabelFields()" style="margin-top:12px;">保存配置</button>
     <span id="labelSaveHint" style="color:var(--success);margin-left:8px;display:none;">已保存</span>
 
     <h4 style="margin-top:24px;margin-bottom:8px;">标签预览（60×40mm，QR 二维码）</h4>
@@ -49,24 +60,15 @@
 {% block scripts %}
 <script>
 let currentLogo = '';
-let labelFieldOptions = [];
-let labelMaxFields = 3;
-const fallbackFieldLabels = {name:'资产名称',serial_number:'序列号',holder:'持有人',location:'位置',brand:'品牌',model:'型号'};
 const previewAsset = {
     id: 0,
     asset_tag: 'PC-2026-0001',
     name: 'ThinkPad T14s',
-    serial_number: 'SN-LNV-001',
-    holder_name: '张三',
     location: '工位A-101',
     brand: 'Lenovo',
     model: 'T14s Gen 4',
+    category: 'computer',
 };
-
-function fieldLabel(field) {
-    const item = labelFieldOptions.find(option => option.key === field);
-    return item ? item.label : (fallbackFieldLabels[field] || field);
-}
 
 async function loadAll() {
     const [labelRes, qrRes, logoRes] = await Promise.all([
@@ -74,75 +76,11 @@ async function loadAll() {
         apiFetch('/api/settings/qr-base-url'),
         apiFetch('/api/settings/logo'),
     ]);
-    labelFieldOptions = labelRes.options || [];
-    labelMaxFields = labelRes.max_fields || 3;
-    document.getElementById('maxFieldCount').textContent = labelMaxFields;
-    renderFixedFields(labelRes.fixed_fields || []);
-    renderFieldCheckboxes(labelRes.fields || []);
+    document.getElementById('showLocation').checked = (labelRes.fields || []).includes('location');
     document.getElementById('qrBaseUrl').value = qrRes.qr_base_url;
     currentLogo = logoRes.logo || '';
     renderLogoPreview();
-    renderLabelPreview(labelRes.fields);
-}
-
-function renderFixedFields(fixedFields) {
-    const el = document.getElementById('fixedFieldList');
-    el.replaceChildren();
-    fixedFields.forEach(field => {
-        const chip = document.createElement('span');
-        chip.style.border = '1px solid var(--color-border)';
-        chip.style.borderRadius = '999px';
-        chip.style.padding = '4px 10px';
-        chip.style.background = 'var(--color-bg-main)';
-        chip.textContent = field.label;
-        el.appendChild(chip);
-    });
-}
-
-function makeFieldCheckbox(option, checkedFields) {
-    const label = document.createElement('label');
-    label.style.display = 'flex';
-    label.style.alignItems = 'flex-start';
-    label.style.gap = '8px';
-    label.style.marginBottom = '8px';
-    const cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.value = option.key;
-    cb.checked = checkedFields.includes(option.key);
-    const text = document.createElement('span');
-    text.textContent = option.label;
-    if (option.volatile) {
-        const hint = document.createElement('span');
-        hint.className = 'text-muted';
-        hint.style.fontSize = '12px';
-        hint.textContent = '（会随领用/位置变化，建议通过扫码查看）';
-        text.appendChild(hint);
-    }
-    label.append(cb, text);
-    return label;
-}
-
-function renderFieldGroup(title, options, checkedFields) {
-    const group = document.createElement('div');
-    group.style.marginBottom = '12px';
-    const heading = document.createElement('div');
-    heading.style.fontWeight = '700';
-    heading.style.marginBottom = '8px';
-    heading.textContent = title;
-    group.appendChild(heading);
-    options.forEach(option => group.appendChild(makeFieldCheckbox(option, checkedFields)));
-    return group;
-}
-
-function renderFieldCheckboxes(checkedFields) {
-    const el = document.getElementById('fieldCheckboxes');
-    el.replaceChildren();
-    const stable = labelFieldOptions.filter(option => option.group !== 'dynamic');
-    const dynamic = labelFieldOptions.filter(option => option.group === 'dynamic');
-    el.appendChild(renderFieldGroup('推荐和可选字段', stable, checkedFields));
-    el.appendChild(renderFieldGroup('高级动态字段', dynamic, checkedFields));
-    bindFieldCheckboxEvents();
-    updateFieldLimitState();
+    renderLabelPreview();
 }
 
 function renderLogoPreview() {
@@ -167,11 +105,11 @@ function renderLogoPreview() {
     }
 }
 
-function renderLabelPreview(fields) {
-    fields = fields || ['name', 'serial_number'];
+function renderLabelPreview() {
     const el = document.getElementById('labelPreview');
+    const fields = document.getElementById('showLocation').checked ? ['location'] : [];
     const label = createPhysicalLabel(previewAsset, '', {dimensions: true, logoUrl: currentLogo, fields});
-    const qrWrap = label.querySelector('.qr-code-wrapper');
+    const qrWrap = label.querySelector('.label-qr');
     qrWrap.replaceChildren();
     const qrMock = document.createElement('span');
     qrMock.style.fontSize = '10px';
@@ -192,23 +130,19 @@ async function uploadLogo() {
     if (!res.ok) { alert(data.error || '上传失败'); return; }
     currentLogo = data.logo;
     renderLogoPreview();
-    const fields = [...document.querySelectorAll('#fieldCheckboxes input:checked')].map(cb => cb.value);
-    renderLabelPreview(fields);
+    renderLabelPreview();
 }
 
 async function deleteLogo() {
     await apiFetch('/api/settings/logo', {method: 'DELETE'});
     currentLogo = '';
     renderLogoPreview();
-    const fields = [...document.querySelectorAll('#fieldCheckboxes input:checked')].map(cb => cb.value);
-    renderLabelPreview(fields);
+    renderLabelPreview();
 }
 
 async function saveLabelFields() {
-    const fields = [...document.querySelectorAll('#fieldCheckboxes input:checked')].map(cb => cb.value);
-    const res = await apiFetch('/api/settings/label', {method: 'PUT', body: JSON.stringify({fields})});
-    renderFieldCheckboxes(res.fields || fields);
-    renderLabelPreview(res.fields || fields);
+    const fields = document.getElementById('showLocation').checked ? ['location'] : [];
+    await apiFetch('/api/settings/label', {method: 'PUT', body: JSON.stringify({fields})});
     const hint = document.getElementById('labelSaveHint');
     hint.style.display = 'inline';
     setTimeout(() => hint.style.display = 'none', 2000);
@@ -223,32 +157,7 @@ async function saveQrBaseUrl() {
     setTimeout(() => hint.style.display = 'none', 2000);
 }
 
-function selectedLabelFields() {
-    return [...document.querySelectorAll('#fieldCheckboxes input:checked')].map(cb => cb.value);
-}
-
-function updateFieldLimitState() {
-    const selected = selectedLabelFields();
-    const unchecked = document.querySelectorAll('#fieldCheckboxes input:not(:checked)');
-    unchecked.forEach(cb => { cb.disabled = selected.length >= labelMaxFields; });
-    const hint = document.getElementById('fieldLimitHint');
-    hint.textContent = `已选择 ${selected.length}/${labelMaxFields} 个辅助字段。`;
-}
-
-function bindFieldCheckboxEvents() {
-    document.querySelectorAll('#fieldCheckboxes input').forEach(cb => {
-        cb.addEventListener('change', () => {
-            const selected = selectedLabelFields();
-            if (selected.length > labelMaxFields) {
-                cb.checked = false;
-                alert(`辅助字段最多选择 ${labelMaxFields} 个`);
-                return;
-            }
-            updateFieldLimitState();
-            renderLabelPreview(selectedLabelFields());
-        });
-    });
-}
+document.getElementById('showLocation').addEventListener('change', renderLabelPreview);
 
 loadAll();
 </script>
