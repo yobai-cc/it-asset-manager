@@ -4,6 +4,8 @@
 
 **Python Flask + SQLite + 原生 JS/CSS** — 无前端框架，无构建步骤，开箱即用。
 
+> **当前版本：v1.3** · [下载 tar.gz](https://github.com/yobai-cc/it-asset-manager/releases/download/v1.3/it-asset-manager-v1.3.tar.gz) · [查看全部 Release](https://github.com/yobai-cc/it-asset-manager/releases)
+
 ## 功能概览
 
 - **资产全生命周期**：入库 → 分配 → 归还 → 转移 → 维修 → 报废，完整事件时间线
@@ -60,7 +62,7 @@ python3 server.py                   # 启动 http://0.0.0.0:5000
 | 前端 | Jinja2 + 原生 HTML/CSS/JS |
 | 二维码 | Python `qrcode` + Pillow |
 | 生产部署 | Gunicorn + systemd |
-| 测试 | pytest（295 测试用例） |
+| 测试 | pytest（303 测试用例） |
 
 ## 页面一览
 
