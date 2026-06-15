@@ -1060,6 +1060,61 @@ textarea {
     padding: 14px 16px;
     border-bottom: 1px solid var(--color-border);
     font-size: var(--fs-meta);
+    position: relative;
+}
+
+.column-filter-head {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+}
+
+.column-filter-btn {
+    width: 22px;
+    height: 22px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    line-height: 1;
+}
+
+.column-filter-btn:hover,
+.column-filter-btn.active {
+    border-color: var(--color-border);
+    background: #fff;
+    color: var(--color-primary);
+}
+
+.column-filter-panel {
+    position: fixed;
+    z-index: 1000;
+    width: 240px;
+    padding: 12px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-medium);
+    background: #fff;
+    box-shadow: var(--shadow-dropdown);
+}
+
+.column-filter-title {
+    margin-bottom: 8px;
+    color: var(--color-text-main);
+    font-weight: 700;
+    font-size: var(--fs-body);
+}
+
+.column-filter-input {
+    width: 100%;
+}
+
+.column-filter-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 10px;
 }
 
 .asset-data-table td,

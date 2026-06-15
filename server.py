@@ -638,6 +638,8 @@ def api_assets_list():
     category = request.args.get("category")
     status = request.args.get("status")
     search = request.args.get("search")
+    location = request.args.get("location")
+    holder = request.args.get("holder")
     deleted_only = request.args.get("deleted_only", "").lower() == "true"
     page, error = _parse_positive_int_arg("page", 1)
     if error:
@@ -659,14 +661,22 @@ def api_assets_list():
     if status:
         where_clauses.append("a.status = ?")
         params.append(status)
+    if location:
+        where_clauses.append("a.location LIKE ?")
+        params.append(f"%{location}%")
+    if holder:
+        where_clauses.append("e.name LIKE ?")
+        params.append(f"%{holder}%")
     if search:
-        where_clauses.append("(a.asset_tag LIKE ? OR a.name LIKE ? OR a.serial_number LIKE ? OR a.brand LIKE ?)")
-        params.extend([f"%{search}%"] * 4)
+        where_clauses.append("(a.asset_tag LIKE ? OR a.name LIKE ? OR a.serial_number LIKE ? OR a.brand LIKE ? OR a.model LIKE ? OR a.location LIKE ? OR e.name LIKE ?)")
+        params.extend([f"%{search}%"] * 7)
 
     where = " WHERE " + " AND ".join(where_clauses)
 
     with db.get_conn() as conn:
-        total = conn.execute(f"SELECT COUNT(*) as c FROM asset a{where}", params).fetchone()["c"]
+        total = conn.execute(f"""SELECT COUNT(*) as c
+                FROM asset a LEFT JOIN employee e ON a.current_holder_id = e.id
+                {where}""", params).fetchone()["c"]
         rows = conn.execute(
             f"""SELECT a.*, e.name as holder_name, e.department as holder_dept
                 FROM asset a LEFT JOIN employee e ON a.current_holder_id = e.id
@@ -1841,6 +1851,8 @@ def api_assets_export():
     category = request.args.get("category")
     status = request.args.get("status")
     search = request.args.get("search")
+    location = request.args.get("location")
+    holder = request.args.get("holder")
     asset_ids = request.args.get("ids")
 
     where_clauses = ["a.deleted_at IS NULL"]
@@ -1851,9 +1863,15 @@ def api_assets_export():
     if status:
         where_clauses.append("a.status = ?")
         params.append(status)
+    if location:
+        where_clauses.append("a.location LIKE ?")
+        params.append(f"%{location}%")
+    if holder:
+        where_clauses.append("e.name LIKE ?")
+        params.append(f"%{holder}%")
     if search:
-        where_clauses.append("(a.asset_tag LIKE ? OR a.name LIKE ? OR a.serial_number LIKE ? OR a.brand LIKE ?)")
-        params.extend([f"%{search}%"] * 4)
+        where_clauses.append("(a.asset_tag LIKE ? OR a.name LIKE ? OR a.serial_number LIKE ? OR a.brand LIKE ? OR a.model LIKE ? OR a.location LIKE ? OR e.name LIKE ?)")
+        params.extend([f"%{search}%"] * 7)
     if asset_ids:
         id_list = [int(x) for x in asset_ids.split(",") if x.strip().isdigit()]
         if id_list:

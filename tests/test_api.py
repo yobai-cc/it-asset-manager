@@ -336,6 +336,29 @@ class TestAssetCRUD:
         data = res.get_json()
         assert all(a["category"] == "computer" for a in data["assets"])
 
+    def test_list_assets_filter_location(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        app_client.post("/api/assets", json={"name": "PC1", "category": "computer", "location": "上海办公室-A区"})
+        app_client.post("/api/assets", json={"name": "PC2", "category": "computer", "location": "北京办公室-B区"})
+        res = app_client.get("/api/assets?location=上海办公室")
+        data = res.get_json()
+        assert data["total"] >= 1
+        assert all("上海办公室" in (a.get("location") or "") for a in data["assets"])
+
+    def test_list_assets_filter_holder(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        with db.get_conn() as conn:
+            holder_id = conn.execute("SELECT id FROM employee WHERE name = ?", ("张三",)).fetchone()["id"]
+        create_res = app_client.post("/api/assets", json={"name": "Holder PC", "category": "computer"})
+        asset_id = create_res.get_json()["id"]
+        app_client.post(f"/api/assets/{asset_id}/assign", json={"target_employee_id": holder_id, "to_location": "研发部工位"})
+        res = app_client.get("/api/assets?holder=张三")
+        data = res.get_json()
+        assert data["total"] >= 1
+        assert all("张三" in (a.get("holder_name") or "") for a in data["assets"])
+
     def test_list_assets_search(self, app_client, db):
         seed_test_data(db)
         login_admin(app_client)
@@ -343,6 +366,19 @@ class TestAssetCRUD:
         res = app_client.get("/api/assets?search=ThinkPad")
         data = res.get_json()
         assert data["total"] >= 1
+
+    def test_list_assets_search_location_and_holder(self, app_client, db):
+        seed_test_data(db)
+        login_admin(app_client)
+        with db.get_conn() as conn:
+            holder_id = conn.execute("SELECT id FROM employee WHERE name = ?", ("张三",)).fetchone()["id"]
+        create_res = app_client.post("/api/assets", json={"name": "Searchable PC", "category": "computer", "location": "上海办公室-C区"})
+        asset_id = create_res.get_json()["id"]
+        app_client.post(f"/api/assets/{asset_id}/assign", json={"target_employee_id": holder_id, "to_location": "上海办公室-C区"})
+        location_res = app_client.get("/api/assets?search=上海办公室-C区")
+        holder_res = app_client.get("/api/assets?search=张三")
+        assert location_res.get_json()["total"] >= 1
+        assert holder_res.get_json()["total"] >= 1
 
     def test_get_asset_detail(self, app_client, db):
         seed_test_data(db)

@@ -32,9 +32,9 @@
             <option value="switch">交换机</option>
         </select>
     </div>
-    <div class="search-wrapper">
+    <div class="search-wrapper asset-search-wrapper">
         <span class="search-icon">🔍</span>
-        <input type="text" id="searchInput" placeholder="搜索标签号、名称、序列号..." class="search-input">
+        <input type="text" id="searchInput" placeholder="全局搜索资产名称、编号、序列号、位置、持有人..." class="search-input">
     </div>
 </div>
 
@@ -67,8 +67,18 @@
                 <th>资产</th>
                 <th>类别</th>
                 <th>状态</th>
-                <th>持有人</th>
-                <th>位置</th>
+                <th>
+                    <div class="column-filter-head">
+                        <span>持有人</span>
+                        <button type="button" class="column-filter-btn" data-filter-target="holder" title="筛选持有人">▾</button>
+                    </div>
+                </th>
+                <th>
+                    <div class="column-filter-head">
+                        <span>位置</span>
+                        <button type="button" class="column-filter-btn" data-filter-target="location" title="筛选位置">▾</button>
+                    </div>
+                </th>
                 <th>操作</th>
             </tr>
         </thead>
@@ -138,7 +148,8 @@ let currentPage = 1;
 let currentStatus = '';
 let isRecycleMode = false;
 let pendingDeleteIds = [];
-let pendingPurgeIds = null; // null = single, array = batch
+let pendingPurgeIds = null;
+let columnFilters = {holder: '', location: ''};
 const statusLabels = {in_stock:'库存',assigned:'在用',maintenance:'维修中',scrapped:'已报废'};
 const catLabels = {computer:'电脑',monitor:'显示器',phone:'手机',tablet:'平板',printer:'打印机',server:'服务器',network:'网络设备',firewall:'防火墙',switch:'交换机'};
 const catColors = {computer:'#2563eb',monitor:'#7c3aed',phone:'#059669',tablet:'#d97706',printer:'#ef4444',server:'#475569',network:'#0891b2',firewall:'#be185d',switch:'#65a30d'};
@@ -155,6 +166,23 @@ function appendTextCell(row, text) {
 
 function getInitialSearch() {
     return new URLSearchParams(window.location.search).get('search') || '';
+}
+
+function getInitialColumnFilters() {
+    const params = new URLSearchParams(window.location.search);
+    columnFilters.holder = params.get('holder') || '';
+    columnFilters.location = params.get('location') || '';
+}
+
+function syncFiltersToUrl(state) {
+    const params = new URLSearchParams();
+    if (state.page && state.page > 1) params.set('page', state.page);
+    if (state.search) params.set('search', state.search);
+    if (state.category) params.set('category', state.category);
+    if (state.location) params.set('location', state.location);
+    if (state.holder) params.set('holder', state.holder);
+    const qs = params.toString();
+    history.replaceState(null, '', qs ? `?${qs}` : window.location.pathname);
 }
 
 function updateUIForMode() {
@@ -191,14 +219,19 @@ async function loadAssets(page = 1) {
     currentPage = page;
     const search = document.getElementById('searchInput').value.trim();
     const category = document.getElementById('categoryFilter').value;
+    const location = columnFilters.location.trim();
+    const holder = columnFilters.holder.trim();
     let url = `/api/assets?page=${page}&limit=15`;
     if (search) url += `&search=${encodeURIComponent(search)}`;
     if (category) url += `&category=${encodeURIComponent(category)}`;
+    if (location) url += `&location=${encodeURIComponent(location)}`;
+    if (holder) url += `&holder=${encodeURIComponent(holder)}`;
     if (isRecycleMode) {
         url += '&deleted_only=true';
     } else {
         if (currentStatus) url += `&status=${encodeURIComponent(currentStatus)}`;
     }
+    syncFiltersToUrl({page, search, category, location, holder});
     const data = await apiFetch(url);
     const tbody = document.getElementById('asset-table-body');
     tbody.replaceChildren();
@@ -638,21 +671,99 @@ function exportCSV() {
     if (isRecycleMode) return;
     const search = document.getElementById('searchInput').value.trim();
     const category = document.getElementById('categoryFilter').value;
+    const location = columnFilters.location.trim();
+    const holder = columnFilters.holder.trim();
     const checked = [...document.querySelectorAll('.asset-checkbox:checked')];
     const params = [];
     if (search) params.push(`search=${encodeURIComponent(search)}`);
     if (category) params.push(`category=${encodeURIComponent(category)}`);
+    if (location) params.push(`location=${encodeURIComponent(location)}`);
+    if (holder) params.push(`holder=${encodeURIComponent(holder)}`);
     if (currentStatus) params.push(`status=${encodeURIComponent(currentStatus)}`);
     if (checked.length > 0) params.push(`ids=${checked.map(box => box.value).join(',')}`);
     window.location.href = '/api/assets/export?' + params.join('&');
 }
 
+function updateColumnFilterButtons() {
+    document.querySelectorAll('.column-filter-btn').forEach(button => {
+        const key = button.dataset.filterTarget;
+        button.classList.toggle('active', Boolean(columnFilters[key]));
+    });
+}
+
+function closeColumnFilterPanel() {
+    const panel = document.getElementById('columnFilterPanel');
+    if (panel) panel.remove();
+}
+
+function openColumnFilterPanel(button) {
+    const key = button.dataset.filterTarget;
+    const labels = {holder: '持有人', location: '位置'};
+    closeColumnFilterPanel();
+    const rect = button.getBoundingClientRect();
+    const panel = document.createElement('div');
+    panel.id = 'columnFilterPanel';
+    panel.className = 'column-filter-panel';
+    const title = document.createElement('div');
+    title.className = 'column-filter-title';
+    title.textContent = `筛选${labels[key]}`;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'form-input column-filter-input';
+    input.value = columnFilters[key] || '';
+    input.placeholder = `输入${labels[key]}关键词`;
+    const actions = document.createElement('div');
+    actions.className = 'column-filter-actions';
+    const clearBtn = document.createElement('button');
+    clearBtn.type = 'button';
+    clearBtn.className = 'btn btn-secondary btn-sm';
+    clearBtn.textContent = '清除';
+    const applyBtn = document.createElement('button');
+    applyBtn.type = 'button';
+    applyBtn.className = 'btn btn-primary btn-sm';
+    applyBtn.textContent = '确定';
+    actions.append(clearBtn, applyBtn);
+    panel.append(title, input, actions);
+    document.body.appendChild(panel);
+    panel.style.left = `${Math.min(rect.left, window.innerWidth - 260)}px`;
+    panel.style.top = `${rect.bottom + 6}px`;
+    input.focus();
+    input.select();
+    applyBtn.addEventListener('click', () => {
+        columnFilters[key] = input.value.trim();
+        closeColumnFilterPanel();
+        updateColumnFilterButtons();
+        loadAssets();
+    });
+    clearBtn.addEventListener('click', () => {
+        columnFilters[key] = '';
+        closeColumnFilterPanel();
+        updateColumnFilterButtons();
+        loadAssets();
+    });
+    input.addEventListener('keydown', event => {
+        if (event.key === 'Enter') applyBtn.click();
+        if (event.key === 'Escape') closeColumnFilterPanel();
+    });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('searchInput').value = getInitialSearch();
+    getInitialColumnFilters();
+    updateColumnFilterButtons();
     document.getElementById('searchInput').addEventListener('keydown', event => {
         if (event.key === 'Enter') loadAssets();
     });
     document.getElementById('categoryFilter').addEventListener('change', () => loadAssets());
+    document.querySelectorAll('.column-filter-btn').forEach(button => {
+        button.addEventListener('click', event => {
+            event.stopPropagation();
+            openColumnFilterPanel(button);
+        });
+    });
+    document.addEventListener('click', event => {
+        if (!event.target.closest('#columnFilterPanel, .column-filter-btn')) closeColumnFilterPanel();
+    });
     document.getElementById('statusTabs').addEventListener('click', event => {
         const tab = event.target.closest('.tab-btn');
         if (!tab) return;
