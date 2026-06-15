@@ -12,44 +12,103 @@ const catLabels = {computer:'电脑',monitor:'显示器',phone:'手机',tablet:'
 const catIcons = {computer:'\u{1F4BB}',monitor:'\u{1F5A5}',phone:'\u{1F4F1}',tablet:'\u{1F4CB}',printer:'\u{1F5A8}',server:'\u{1F5C4}',network:'\u{1F310}',firewall:'\u{1F6E1}',switch:'\u{1F500}'};
 const eventNames = {stock_in:'入库',assign:'分配',return:'归还',transfer:'转移',maintenance_start:'送修',maintenance_end:'维修完成',scrap:'报废',label_print:'打印标签'};
 
+function text(value) {
+    return value === null || value === undefined || value === '' ? '-' : value;
+}
+
+function makeRow(label, content) {
+    const tr = document.createElement('tr');
+    const th = document.createElement('th');
+    th.textContent = label;
+    const td = document.createElement('td');
+    if (typeof content === 'string') {
+        td.textContent = content;
+    } else if (content) {
+        td.appendChild(content);
+    }
+    tr.append(th, td);
+    return tr;
+}
+
 async function loadDetail() {
-    const data = await apiFetch(`/api/assets/${assetId}`);
-    let eventsHtml = '';
+    const root = document.getElementById('assetDetail');
+    let data;
+    try {
+        data = await apiFetch(`/api/assets/${assetId}`);
+    } catch (e) {
+        root.replaceChildren();
+        const p = document.createElement('p');
+        p.className = 'error-text';
+        p.textContent = '加载失败';
+        root.appendChild(p);
+        return;
+    }
+    root.replaceChildren();
+
+    const h2 = document.createElement('h2');
+    h2.textContent = data.asset_tag;
+    root.appendChild(h2);
+
+    const badge = document.createElement('span');
+    badge.className = `badge ${statusClasses[data.status] || ''}`.trim();
+    badge.textContent = statusLabels[data.status] || data.status;
+    root.appendChild(badge);
+
+    const catSpan = document.createElement('span');
+    catSpan.textContent = `${catIcons[data.category] || ''} ${catLabels[data.category] || data.category}`.trim();
+
+    const table = document.createElement('table');
+    table.className = 'detail-table';
+    table.appendChild(makeRow('名称', text(data.name)));
+    table.appendChild(makeRow('类别', catSpan));
+    table.appendChild(makeRow('品牌', text(data.brand)));
+    table.appendChild(makeRow('型号', text(data.model)));
+    table.appendChild(makeRow('序列号', text(data.serial_number)));
+    table.appendChild(makeRow('位置', text(data.location)));
+    table.appendChild(makeRow('备注', text(data.notes)));
+    root.appendChild(table);
+
+    const h3 = document.createElement('h3');
+    h3.style.marginTop = '24px';
+    h3.textContent = '生命周期时间线';
+    root.appendChild(h3);
+
     if (data.events && data.events.length) {
-        eventsHtml = '<div class="timeline">';
+        const timeline = document.createElement('div');
+        timeline.className = 'timeline';
         data.events.forEach(e => {
-            const d = new Date(e.created_at);
-            eventsHtml += `<div class="timeline-item">
-                <div class="timeline-dot"></div>
-                <div class="timeline-content">
-                    <div class="timeline-title">${eventNames[e.event_type]||e.event_type}</div>
-                    <div class="timeline-meta">${d.toLocaleString('zh-CN')}</div>
-                </div>
-            </div>`;
+            const item = document.createElement('div');
+            item.className = 'timeline-item';
+            const dot = document.createElement('div');
+            dot.className = 'timeline-dot';
+            const content = document.createElement('div');
+            content.className = 'timeline-content';
+            const title = document.createElement('div');
+            title.className = 'timeline-title';
+            title.textContent = eventNames[e.event_type] || e.event_type;
+            const meta = document.createElement('div');
+            meta.className = 'timeline-meta';
+            meta.textContent = e.created_at ? new Date(e.created_at).toLocaleString('zh-CN') : '-';
+            content.append(title, meta);
+            item.append(dot, content);
+            timeline.appendChild(item);
         });
-        eventsHtml += '</div>';
+        root.appendChild(timeline);
     } else {
-        eventsHtml = '<p class="text-muted">暂无生命周期事件</p>';
+        const empty = document.createElement('p');
+        empty.className = 'text-muted';
+        empty.textContent = '暂无生命周期事件';
+        root.appendChild(empty);
     }
 
-    document.getElementById('assetDetail').innerHTML = `
-        <h2>${data.asset_tag}</h2>
-        <span class="badge ${statusClasses[data.status]}">${statusLabels[data.status]}</span>
-        <table class="detail-table">
-            <tr><th>名称</th><td>${data.name}</td></tr>
-            <tr><th>类别</th><td>${catIcons[data.category]||''} ${catLabels[data.category]||data.category}</td></tr>
-            <tr><th>品牌</th><td>${data.brand||'-'}</td></tr>
-            <tr><th>型号</th><td>${data.model||'-'}</td></tr>
-            <tr><th>序列号</th><td>${data.serial_number||'-'}</td></tr>
-            <tr><th>位置</th><td>${data.location||'-'}</td></tr>
-            <tr><th>备注</th><td>${data.notes||'-'}</td></tr>
-        </table>
-        <h3 style="margin-top:24px;">生命周期时间线</h3>
-        ${eventsHtml}
-        <div style="margin-top:16px;">
-            <a href="/my/assets" class="btn btn-secondary">返回我的资产</a>
-        </div>
-    `;
+    const back = document.createElement('div');
+    back.style.marginTop = '16px';
+    const link = document.createElement('a');
+    link.href = '/my/assets';
+    link.className = 'btn btn-secondary';
+    link.textContent = '返回我的资产';
+    back.appendChild(link);
+    root.appendChild(back);
 }
 
 loadDetail();

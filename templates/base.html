@@ -99,6 +99,117 @@
     {% endif %}
 
     <script>
+    // ===== 全局对话框 helper（替代原生 alert/confirm/prompt，移动端友好）=====
+    function showToast(message, type = 'info', duration = 2800) {
+        let container = document.getElementById('toastContainer');
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'toastContainer';
+            container.className = 'toast-container';
+            document.body.appendChild(container);
+        }
+        const toast = document.createElement('div');
+        toast.className = `toast toast-${type}`;
+        toast.setAttribute('role', type === 'error' ? 'alert' : 'status');
+        toast.textContent = message;
+        container.appendChild(toast);
+        requestAnimationFrame(() => toast.classList.add('show'));
+        setTimeout(() => {
+            toast.classList.remove('show');
+            setTimeout(() => toast.remove(), 300);
+        }, duration);
+    }
+
+    function confirmDialog(message, options = {}) {
+        const {title, confirmText = '确定', cancelText = '取消', danger = false} = options;
+        return new Promise(resolve => {
+            const overlay = document.createElement('div');
+            overlay.className = 'modal';
+            overlay.style.display = 'flex';
+            const content = document.createElement('div');
+            content.className = 'modal-content';
+            content.style.maxWidth = '400px';
+            if (title) {
+                const h = document.createElement('h3');
+                h.textContent = title;
+                content.appendChild(h);
+            }
+            const p = document.createElement('p');
+            p.className = 'dialog-message';
+            p.textContent = message;
+            content.appendChild(p);
+            const actions = document.createElement('div');
+            actions.className = 'dialog-actions';
+            const cancel = document.createElement('button');
+            cancel.type = 'button';
+            cancel.className = 'btn btn-secondary';
+            cancel.textContent = cancelText;
+            const confirm = document.createElement('button');
+            confirm.type = 'button';
+            confirm.className = 'btn ' + (danger ? 'btn-danger' : 'btn-primary');
+            confirm.textContent = confirmText;
+            actions.append(cancel, confirm);
+            content.appendChild(actions);
+            overlay.appendChild(content);
+            document.body.appendChild(overlay);
+            const close = (val) => { overlay.remove(); document.removeEventListener('keydown', onKey); resolve(val); };
+            const onKey = (e) => { if (e.key === 'Escape') close(false); if (e.key === 'Enter') close(true); };
+            cancel.addEventListener('click', () => close(false));
+            confirm.addEventListener('click', () => close(true));
+            overlay.addEventListener('click', (e) => { if (e.target === overlay) close(false); });
+            document.addEventListener('keydown', onKey);
+            setTimeout(() => confirm.focus(), 0);
+        });
+    }
+
+    function promptDialog(message, options = {}) {
+        const {title, placeholder = '', defaultValue = '', confirmText = '确定', cancelText = '取消'} = options;
+        return new Promise(resolve => {
+            const overlay = document.createElement('div');
+            overlay.className = 'modal';
+            overlay.style.display = 'flex';
+            const content = document.createElement('div');
+            content.className = 'modal-content';
+            content.style.maxWidth = '400px';
+            if (title) {
+                const h = document.createElement('h3');
+                h.textContent = title;
+                content.appendChild(h);
+            }
+            const p = document.createElement('p');
+            p.className = 'dialog-message';
+            p.textContent = message;
+            content.appendChild(p);
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'form-input dialog-input';
+            input.value = defaultValue;
+            input.placeholder = placeholder;
+            content.appendChild(input);
+            const actions = document.createElement('div');
+            actions.className = 'dialog-actions';
+            const cancel = document.createElement('button');
+            cancel.type = 'button';
+            cancel.className = 'btn btn-secondary';
+            cancel.textContent = cancelText;
+            const confirm = document.createElement('button');
+            confirm.type = 'button';
+            confirm.className = 'btn btn-primary';
+            confirm.textContent = confirmText;
+            actions.append(cancel, confirm);
+            content.appendChild(actions);
+            overlay.appendChild(content);
+            document.body.appendChild(overlay);
+            const close = (val) => { overlay.remove(); document.removeEventListener('keydown', onKey); resolve(val); };
+            const onKey = (e) => { if (e.key === 'Escape') close(null); if (e.key === 'Enter') close(input.value); };
+            cancel.addEventListener('click', () => close(null));
+            confirm.addEventListener('click', () => close(input.value));
+            overlay.addEventListener('click', (e) => { if (e.target === overlay) close(null); });
+            document.addEventListener('keydown', onKey);
+            setTimeout(() => { input.focus(); input.select(); }, 0);
+        });
+    }
+
     async function apiFetch(url, options = {}) {
         const headers = options.body instanceof FormData
             ? {...options.headers}
@@ -106,7 +217,7 @@
         const res = await fetch(url, {headers, ...options});
         const data = await res.json();
         if (!res.ok) {
-            alert(data.error || '操作失败');
+            showToast(data.error || '操作失败', 'error');
             throw new Error(data.error || '操作失败');
         }
         return data;
@@ -209,15 +320,61 @@
         return label;
     }
 
+    const DEFAULT_LABEL_FIELDS = ['name', 'serial_number'];
+    let labelConfigPromise = null;
+    let labelConfigCache = null;
+    let drawerRequestSeq = 0;
+
+    async function fetchOptionalJson(url) {
+        const res = await fetch(url);
+        let data = {};
+        try { data = await res.json(); } catch (err) {}
+        if (!res.ok) throw new Error((data && data.error) || '加载设置失败');
+        return data;
+    }
+
+    function ensureLabelConfig() {
+        if (labelConfigCache) return Promise.resolve(labelConfigCache);
+        if (!labelConfigPromise) {
+            labelConfigPromise = Promise.all([
+                fetchOptionalJson('/api/settings/logo'),
+                fetchOptionalJson('/api/settings/label'),
+            ]).then(([logoData, labelData]) => ({
+                logo: (logoData && logoData.logo) || '',
+                fields: (labelData && Array.isArray(labelData.fields)) ? labelData.fields : DEFAULT_LABEL_FIELDS,
+            })).then(cfg => {
+                labelConfigCache = cfg;
+                return cfg;
+            }).finally(() => {
+                labelConfigPromise = null;
+            });
+        }
+        return labelConfigPromise;
+    }
+
+    function getCachedLabelConfig() {
+        return labelConfigCache || {logo: '', fields: DEFAULT_LABEL_FIELDS};
+    }
+
     async function openAssetDetailDrawer(id) {
         const drawer = document.getElementById('global-detail-drawer');
         if (!drawer) return;
+        const requestSeq = String(++drawerRequestSeq);
+        drawer.dataset.assetId = String(id);
+        drawer.dataset.requestSeq = requestSeq;
         drawer.replaceChildren(makeEl('p', 'text-muted', '加载资产详情...'));
         drawer.classList.add('is-open');
         try {
             const data = await apiFetch(`/api/assets/${id}`);
-            renderDrawerContent(data);
+            if (drawer.dataset.requestSeq !== requestSeq) return;
+            renderDrawerContent(data, getCachedLabelConfig());
+            ensureLabelConfig().then(cfg => {
+                if (drawer.dataset.requestSeq === requestSeq && drawer.dataset.assetId === String(id) && drawer.classList.contains('is-open')) {
+                    renderDrawerContent(data, cfg);
+                }
+            }).catch(() => {});
         } catch (err) {
+            if (drawer.dataset.requestSeq !== requestSeq) return;
             drawer.replaceChildren(makeEl('p', 'error-text', err.message || '加载失败'));
         }
     }
@@ -236,7 +393,7 @@
         grid.appendChild(card);
     }
 
-    function renderDrawerContent(asset) {
+    function renderDrawerContent(asset, cfg) {
         const drawer = document.getElementById('global-detail-drawer');
         if (!drawer) return;
 
@@ -326,23 +483,9 @@
             const labelTitle = makeEl('h3', 'drawer-section-title', '标签预览 (60×40mm)');
             labelTitle.style.marginTop = '24px';
             const labelBox = makeEl('div', 'label-preview-box');
-            const logoValue = window.__assetLabelLogo || '';
-            const labelFields = window.__assetLabelFields || ['name', 'serial_number'];
-            if (logoValue) {
-                labelBox.appendChild(createPhysicalLabel(asset, `/api/assets/${asset.id}/qr`, {compact: true, logoUrl: logoValue, fields: labelFields}));
-            } else {
-                labelBox.appendChild(createPhysicalLabel(asset, `/api/assets/${asset.id}/qr`, {compact: true, fields: labelFields}));
-                apiFetch('/api/settings/logo').then(logoData => {
-                    window.__assetLabelLogo = logoData.logo || '';
-                    if (window.__assetLabelLogo) renderDrawerContent(asset);
-                }).catch(() => {});
-            }
-            if (!window.__assetLabelFields) {
-                apiFetch('/api/settings/label').then(labelData => {
-                    window.__assetLabelFields = labelData.fields || ['name', 'serial_number'];
-                    renderDrawerContent(asset);
-                }).catch(() => {});
-            }
+            const labelOpts = {compact: true, fields: (cfg && cfg.fields) || DEFAULT_LABEL_FIELDS};
+            if (cfg && cfg.logo) labelOpts.logoUrl = cfg.logo;
+            labelBox.appendChild(createPhysicalLabel(asset, `/api/assets/${asset.id}/qr`, labelOpts));
             body.append(labelTitle, labelBox);
         }
 
@@ -397,14 +540,15 @@
         const deleteButton = event.target.closest('[data-drawer-delete]');
         if (deleteButton) {
             const id = deleteButton.dataset.drawerDelete;
-            const reason = prompt('移入回收站原因（可选，直接确定跳过）：');
+            const reason = await promptDialog('移入回收站原因（可选，留空跳过）：', {title: '移入回收站'});
             if (reason === null) return;
             try {
                 await apiFetch(`/api/assets/${id}`, {method: 'DELETE', body: JSON.stringify({reason})});
+                showToast('资产已移入回收站', 'success');
                 closeAssetDetailDrawer();
                 document.dispatchEvent(new CustomEvent('asset:changed'));
             } catch (err) {
-                if (err.message && !err.message.includes('操作失败')) alert(err.message);
+                if (err.message && !err.message.includes('操作失败')) showToast(err.message, 'error');
             }
             return;
         }
@@ -413,26 +557,26 @@
             const id = restoreButton.dataset.drawerRestore;
             try {
                 await apiFetch(`/api/assets/${id}/restore`, {method: 'POST'});
-                alert('资产已恢复');
+                showToast('资产已恢复', 'success');
                 closeAssetDetailDrawer();
                 document.dispatchEvent(new CustomEvent('asset:changed'));
             } catch (err) {
-                if (err.message && !err.message.includes('操作失败')) alert(err.message);
+                if (err.message && !err.message.includes('操作失败')) showToast(err.message, 'error');
             }
             return;
         }
         const purgeButton = event.target.closest('[data-drawer-purge]');
         if (purgeButton) {
             const id = purgeButton.dataset.drawerPurge;
-            const input = prompt('永久删除不可逆，请输入 DELETE 以确认：');
-            if (input !== 'DELETE') { if (input !== null) alert('输入不正确，已取消'); return; }
+            const input = await promptDialog('永久删除不可逆，请输入 DELETE 以确认：', {title: '永久删除', confirmText: '永久删除'});
+            if (input !== 'DELETE') { if (input !== null) showToast('输入不正确，已取消', 'error'); return; }
             try {
                 await apiFetch(`/api/assets/${id}/purge`, {method: 'DELETE', body: JSON.stringify({confirm: 'DELETE'})});
-                alert('资产已永久删除');
+                showToast('资产已永久删除', 'success');
                 closeAssetDetailDrawer();
                 document.dispatchEvent(new CustomEvent('asset:changed'));
             } catch (err) {
-                if (err.message && !err.message.includes('操作失败')) alert(err.message);
+                if (err.message && !err.message.includes('操作失败')) showToast(err.message, 'error');
             }
             return;
         }
@@ -444,21 +588,21 @@
             const old = document.getElementById('pwdOld').value;
             const nw = document.getElementById('pwdNew').value;
             const cf = document.getElementById('pwdConfirm').value;
-            if (!old || !nw) { alert('请填写旧密码和新密码'); return; }
-            if (nw !== cf) { alert('两次输入的新密码不一致'); return; }
+            if (!old || !nw) { showToast('请填写旧密码和新密码', 'error'); return; }
+            if (nw !== cf) { showToast('两次输入的新密码不一致', 'error'); return; }
             try {
                 await apiFetch('/api/change-password', {
                     method: 'POST',
                     body: JSON.stringify({old_password: old, new_password: nw})
                 });
-                alert('密码修改成功');
+                showToast('密码修改成功', 'success');
                 document.getElementById('changePwdModal').style.display = 'none';
                 document.getElementById('pwdOld').value = '';
                 document.getElementById('pwdNew').value = '';
                 document.getElementById('pwdConfirm').value = '';
             } catch (err) {
-                /* apiFetch already alerts JSON errors; catch network/parse failures */
-                if (err.message && !err.message.includes('操作失败')) alert(err.message);
+                /* apiFetch already toasts JSON errors; catch network/parse failures */
+                if (err.message && !err.message.includes('操作失败')) showToast(err.message, 'error');
             }
         });
     }

@@ -120,61 +120,6 @@ function handlePhotoScan(input) {
     input.value = '';
 }
 
-function renderResult(asset, tag) {
-    const statusLabels = {in_stock:'库存',assigned:'在用',maintenance:'维修中',scrapped:'已报废'};
-    const statusClasses = {in_stock:'badge-instock',assigned:'badge-assigned',maintenance:'badge-maintenance',scrapped:'badge-scrapped'};
-    const catLabels = {computer:'电脑',monitor:'显示器',phone:'手机',tablet:'平板',printer:'打印机',server:'服务器',network:'网络设备',firewall:'防火墙',switch:'交换机'};
-    const catIcons = {computer:'\u{1F4BB}',monitor:'\u{1F5A5}',phone:'\u{1F4F1}',tablet:'\u{1F4CB}',printer:'\u{1F5A8}',server:'\u{1F5C4}',network:'\u{1F310}',firewall:'\u{1F6E1}',switch:'\u{1F500}'};
-    const el = document.getElementById('scanStatus');
-    const card = document.createElement('div');
-    card.className = 'scan-card';
-
-    const tagEl = document.createElement('div');
-    tagEl.className = 'scan-tag';
-    tagEl.textContent = `${catIcons[asset.category] || ''} ${asset.asset_tag}`.trim();
-    card.appendChild(tagEl);
-
-    const nameEl = document.createElement('div');
-    nameEl.className = 'scan-name';
-    nameEl.textContent = asset.name;
-    card.appendChild(nameEl);
-
-    const statusWrap = document.createElement('div');
-    statusWrap.className = 'scan-status';
-    const badge = document.createElement('span');
-    badge.className = `badge ${statusClasses[asset.status] || ''}`.trim();
-    badge.textContent = statusLabels[asset.status] || asset.status;
-    statusWrap.appendChild(badge);
-    card.appendChild(statusWrap);
-
-    const meta = document.createElement('div');
-    meta.className = 'scan-meta';
-    if (asset.brand) {
-        const brandLine = document.createElement('div');
-        brandLine.textContent = asset.brand + (asset.model ? ' ' + asset.model : '');
-        meta.appendChild(brandLine);
-    }
-    const categoryLine = document.createElement('div');
-    categoryLine.textContent = '分类：' + (catLabels[asset.category] || asset.category);
-    meta.appendChild(categoryLine);
-    const locationLine = document.createElement('div');
-    locationLine.textContent = '位置：' + (asset.location || '-');
-    meta.appendChild(locationLine);
-    card.appendChild(meta);
-
-    const actions = document.createElement('div');
-    actions.className = 'scan-card login-prompt';
-    actions.innerHTML = '<p class="text-muted" style="margin-bottom:12px;">登录后可查看更多信息和操作</p><a href="/login" class="btn btn-primary btn-block">登录</a>';
-    card.appendChild(actions);
-
-    const title = document.createElement('div');
-    title.className = 'scan-header';
-    title.textContent = 'IT 资产管理';
-
-    const wrapper = document.getElementById('scanContent');
-    wrapper.replaceChildren(title, card);
-}
-
 async function lookupByTag(tag) {
     const statusEl = document.getElementById('scanStatus') || document.getElementById('photoStatus');
     try {

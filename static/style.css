@@ -2071,13 +2071,6 @@ input[type="checkbox"] {
         padding: 0 var(--space-2);
     }
 
-    .main-header {
-        position: sticky;
-        top: 0;
-        z-index: 40;
-        padding: 0 var(--space-2);
-    }
-
     .main-content,
     .container {
         padding: var(--space-2);
@@ -2219,6 +2212,54 @@ input[type="checkbox"] {
         margin: 0;
     }
 }
+
+/* ============================================================
+   Toast & dialog（替代原生 alert/confirm/prompt，移动端友好）
+   ============================================================ */
+.toast-container {
+    position: fixed;
+    top: var(--space-3);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 300;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-1);
+    pointer-events: none;
+    width: max-content;
+    max-width: calc(100vw - var(--space-4));
+}
+
+.toast {
+    pointer-events: auto;
+    min-width: 220px;
+    padding: 12px var(--space-3);
+    border-radius: var(--radius-medium);
+    background-color: var(--color-text-main);
+    color: #fff;
+    font-size: var(--fs-body);
+    text-align: center;
+    box-shadow: var(--shadow-strong);
+    opacity: 0;
+    transform: translateY(-12px);
+    transition: opacity .2s ease, transform .2s ease;
+}
+
+.toast.show { opacity: 1; transform: translateY(0); }
+.toast-success { background-color: var(--color-success); }
+.toast-error { background-color: var(--color-danger); }
+
+.dialog-message {
+    color: var(--color-text-main);
+    line-height: 1.6;
+    margin-bottom: var(--space-2);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.dialog-input { width: 100%; margin-bottom: var(--space-2); }
+.dialog-actions { display: flex; justify-content: flex-end; gap: var(--space-1); }
 
 /* ============================================================
    Consumables — printer-centric layout

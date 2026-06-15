@@ -2,10 +2,12 @@
 {% block title %}我的申请 - IT 资产管理{% endblock %}
 {% block content %}
 <h2>我的申请 <a href="/my/applications/new" class="btn btn-primary btn-sm">提交新申请</a></h2>
-<table class="table">
-    <thead><tr><th>资产类别</th><th>理由</th><th>状态</th><th>审批备注</th><th>时间</th></tr></thead>
-    <tbody id="appBody"></tbody>
-</table>
+<div class="table-shell">
+    <table class="table">
+        <thead><tr><th>资产类别</th><th>理由</th><th>状态</th><th>审批备注</th><th>时间</th></tr></thead>
+        <tbody id="appBody"></tbody>
+    </table>
+</div>
 {% endblock %}
 {% block scripts %}
 <script>
@@ -13,18 +15,51 @@ const statusLabels = {pending:'待审批',approved:'已批准',rejected:'已驳�
 const statusClasses = {pending:'badge-maintenance',approved:'badge-instock',rejected:'badge-scrapped',fulfilled:'badge-assigned'};
 const catLabels = {computer:'电脑',monitor:'显示器',phone:'手机',tablet:'平板',printer:'打印机',server:'服务器',network:'网络设备',firewall:'防火墙',switch:'交换机'};
 
+function makeCell(text) {
+    const td = document.createElement('td');
+    td.textContent = text === null || text === undefined || text === '' ? '-' : text;
+    return td;
+}
+
 async function loadApps() {
-    const data = await apiFetch('/api/my/applications');
+    let data;
+    try {
+        data = await apiFetch('/api/my/applications');
+    } catch (e) {
+        return;  // apiFetch 已提示错误
+    }
     const tbody = document.getElementById('appBody');
-    tbody.innerHTML = '';
+    tbody.replaceChildren();
+    if (!data.applications.length) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 5;
+        td.className = 'text-muted';
+        td.style.textAlign = 'center';
+        td.textContent = '暂无申请记录';
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+        return;
+    }
     data.applications.forEach(a => {
-        tbody.innerHTML += `<tr>
-            <td>${catLabels[a.asset_category]||a.asset_category||'-'}</td>
-            <td>${a.reason}</td>
-            <td><span class="badge ${statusClasses[a.status]}">${statusLabels[a.status]}</span></td>
-            <td>${a.admin_notes||'-'}</td>
-            <td>${new Date(a.created_at).toLocaleString('zh-CN')}</td>
-        </tr>`;
+        const tr = document.createElement('tr');
+
+        tr.appendChild(makeCell(catLabels[a.asset_category] || a.asset_category));
+
+        tr.appendChild(makeCell(a.reason));
+
+        const badgeTd = document.createElement('td');
+        const badge = document.createElement('span');
+        badge.className = `badge ${statusClasses[a.status] || ''}`.trim();
+        badge.textContent = statusLabels[a.status] || a.status;
+        badgeTd.appendChild(badge);
+        tr.appendChild(badgeTd);
+
+        tr.appendChild(makeCell(a.admin_notes));
+
+        tr.appendChild(makeCell(a.created_at ? new Date(a.created_at).toLocaleString('zh-CN') : '-'));
+
+        tbody.appendChild(tr);
     });
 }
 
