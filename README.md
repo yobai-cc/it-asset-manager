@@ -4,7 +4,7 @@
 
 **Python Flask + SQLite + 原生 JS/CSS** — 无前端框架，无构建步骤，开箱即用。
 
-> **当前版本：v1.4** · [下载 tar.gz](https://github.com/yobai-cc/it-asset-manager/releases/download/v1.4/it-asset-manager-v1.4.tar.gz) · [查看全部 Release](https://github.com/yobai-cc/it-asset-manager/releases)
+> **当前版本：v1.5** · [下载 tar.gz](https://github.com/yobai-cc/it-asset-manager/releases/download/v1.5/it-asset-manager-v1.5.tar.gz) · [查看全部 Release](https://github.com/yobai-cc/it-asset-manager/releases)
 
 ## 功能概览
 

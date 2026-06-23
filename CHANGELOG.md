@@ -1,5 +1,16 @@
 # 改动历史
 
+## 2026-06-23：v1.5 鉴权与错误响应集中化重构
+
+- 鉴权集中化：新增 `@login_required` / `@admin_required` 装饰器（统一写入 `g.user`），替代各 handler 内手写的 `require_role` + if 块；77 个端点（65 admin + 12 login）统一改用装饰器。
+- 错误响应统一：新增 `api_error(message, status)`，原先散落各处的手写 `jsonify({"error": ...})` 收敛到此；`jsonify()` 仅用于成功响应。
+- 业务异常分层：`_get_asset_for_update` 改为抛 `ApiError`，由全局 `@app.errorhandler(ApiError)` 统一转 `api_error()`，不再返回 `(response, status)` 元组；移除 6 处 `isinstance(asset, tuple)` 分支，DB/校验辅助层不再泄漏 HTTP 响应。
+- 鉴权收紧：`GET /api/stats`、`GET /api/applications` 改为 admin-only，并补 4 个鉴权回归测试；清理 `api_applications_list` 死代码。
+- 清理：删除重构后已无调用方的 `require_role()`。
+- 文档：CONVENTIONS.md 新增「错误响应与鉴权约定」并记录 `ApiError` 用法；CLAUDE.md 同步 employee 表字段、漏列 API 与代码规模。
+- 兼容性：HTTP 契约字节不变（错误响应仍为 `{"error": msg}` + 原 status 码）。
+- 测试：`.venv/bin/python -m pytest tests/ -q` → 310 passed。
+
 ## 2026-06-15：v1.4 移动端交互与前端安全修复
 
 - 全局交互：新增移动端友好的 toast、确认框和输入框，替换多处原生 `alert/prompt`，让删除、恢复、永久删除和密码修改反馈更一致。

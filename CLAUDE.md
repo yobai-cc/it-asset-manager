@@ -18,7 +18,7 @@ IT 固定资产管理追踪系统，面向 IT 管理员。
 - **技术栈**：Python Flask 3.1 + SQLite（原生 SQL）+ Jinja2 + 原生 JS + CSS
 - **无前端框架**：纯 vanilla JS，无构建步骤
 - **部署**：Flask 5000 端口 → Caddy 反向代理 9090 端口（your-server:9090）
-- **规模**：server.py ~3250 行，models.py ~492 行，306 个测试
+- **规模**：server.py ~3210 行，models.py ~492 行，310 个测试
 - **标签打印**：立象 Argox 热转印打印机 + 60×40mm 亚银纸，浏览器直接打印（Logo + 资产信息 + QR）
 
 ## 快速启动
@@ -46,7 +46,7 @@ python3 server.py                   # 启动 http://0.0.0.0:5000
 
 ```
 it-asset-manager/
-├── server.py              # Flask 应用：所有路由 + API（单文件，~3250 行）
+├── server.py              # Flask 应用：所有路由 + API（单文件，~3210 行）
 ├── models.py              # 数据模型、常量、Schema SQL、工具函数（~492 行）
 ├── init_db.py             # 数据库初始化 + 种子数据
 ├── requirements.txt       # Flask, gunicorn, qrcode, Pillow, pytest
@@ -80,7 +80,7 @@ it-asset-manager/
 │       ├── applications.html    # 我的申请
 │       └── application_form.html # 提交申请
 ├── tests/
-│   └── test_api.py        # 306 个自动化测试
+│   └── test_api.py        # 310 个自动化测试
 ├── contrib/
 │   └── it-asset-manager.service  # systemd 服务文件
 └── android/               # Android 客户端：P0 规划与 API 合约（docs/，尚未生成 Kotlin 工程）
