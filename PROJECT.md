@@ -20,7 +20,7 @@
 | 前端 | Jinja2 模板 + 原生 JavaScript + CSS |
 | 认证 | Flask session + Werkzeug 密码哈希 |
 | 打印 | 浏览器原生打印，立象 Argox 热转印打印机 |
-| 测试 | pytest，295 个自动化测试 |
+| 测试 | pytest，306 个自动化测试 |
 
 无前端框架、无构建步骤、无 Docker 依赖。
 
@@ -28,11 +28,11 @@
 
 | 文件 | 行数 | 职责 |
 |------|------|------|
-| server.py | ~3170 | 所有路由 + API（单文件） |
+| server.py | ~3250 | 所有路由 + API（单文件） |
 | models.py | ~492 | 数据模型、常量、Schema、迁移 |
 | init_db.py | ~170 | 数据库初始化 + 种子数据 |
-| style.css | ~2600 | Design Tokens + 全局样式 |
-| test_api.py | ~4228 | 295 个自动化测试 |
+| style.css | ~2710 | Design Tokens + 全局样式 |
+| test_api.py | ~4420 | 306 个自动化测试 |
 | templates/ | 21 个模板 | 12 管理页 + 4 员工页 + 5 公共页 |
 
 ## 部署

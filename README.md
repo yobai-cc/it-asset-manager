@@ -105,7 +105,7 @@ python3 server.py                   # 启动 http://0.0.0.0:5000
 | 前端 | Jinja2 + 原生 HTML/CSS/JS |
 | 二维码 | Python `qrcode` + Pillow |
 | 生产部署 | Gunicorn + systemd |
-| 测试 | pytest（303 测试用例） |
+| 测试 | pytest（306 测试用例） |
 
 ## 页面一览
 
@@ -161,6 +161,7 @@ it-asset-manager/
 │   └── employee/          # 员工页面
 ├── contrib/
 │   └── it-asset-manager.service  # systemd 模板
+├── android/               # Android 客户端规划与 API 合约（P0 文档）
 └── tests/
     └── test_api.py        # 自动化测试
 ```

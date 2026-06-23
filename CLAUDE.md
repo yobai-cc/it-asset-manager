@@ -18,7 +18,7 @@ IT 固定资产管理追踪系统，面向 IT 管理员。
 - **技术栈**：Python Flask 3.1 + SQLite（原生 SQL）+ Jinja2 + 原生 JS + CSS
 - **无前端框架**：纯 vanilla JS，无构建步骤
 - **部署**：Flask 5000 端口 → Caddy 反向代理 9090 端口（your-server:9090）
-- **规模**：server.py ~3180 行，models.py ~492 行，303 个测试
+- **规模**：server.py ~3250 行，models.py ~492 行，306 个测试
 - **标签打印**：立象 Argox 热转印打印机 + 60×40mm 亚银纸，浏览器直接打印（Logo + 资产信息 + QR）
 
 ## 快速启动
@@ -46,7 +46,7 @@ python3 server.py                   # 启动 http://0.0.0.0:5000
 
 ```
 it-asset-manager/
-├── server.py              # Flask 应用：所有路由 + API（单文件，~3170 行）
+├── server.py              # Flask 应用：所有路由 + API（单文件，~3250 行）
 ├── models.py              # 数据模型、常量、Schema SQL、工具函数（~492 行）
 ├── init_db.py             # 数据库初始化 + 种子数据
 ├── requirements.txt       # Flask, gunicorn, qrcode, Pillow, pytest
@@ -79,10 +79,11 @@ it-asset-manager/
 │       ├── asset_detail.html    # 资产只读详情
 │       ├── applications.html    # 我的申请
 │       └── application_form.html # 提交申请
-└── tests/
-    └── test_api.py        # 303 个自动化测试
+├── tests/
+│   └── test_api.py        # 306 个自动化测试
 ├── contrib/
 │   └── it-asset-manager.service  # systemd 服务文件
+└── android/               # Android 客户端：P0 规划与 API 合约（docs/，尚未生成 Kotlin 工程）
 ```
 
 ---
@@ -92,24 +93,36 @@ it-asset-manager/
 ### 表结构（10 张表）
 
 ```
-employee             user                 资产申请（asset_application）
-├── id PK            ├── id PK            ├── id PK
-├── name             ├── employee_id UNIQUE  ├── applicant_id → user
-├── department       ├── name             ├── asset_category
-└── created_at       ├── department       ├── reason
-                     ├── phone            ├── status [pending|approved|rejected|fulfilled]
-                     ├── email            ├── admin_id → user
-                     ├── role [admin|employee]  ├── admin_notes
-                     ├── password_hash    └── approved_at
-                     └── created_at
-├── id PK               ├── id PK
-├── employee_id UNIQUE  ├── applicant_id → user
-├── name                ├── asset_category
-├── department          ├── reason
-├── phone               ├── status [pending|approved|rejected|fulfilled]
-├── email               ├── admin_id → user
-├── role [admin|employee]├── admin_notes
-├── password_hash       └── approved_at
+employee（员工花名册）
+├── id PK
+├── employee_id UNIQUE（工号，可空；登录匹配 user.employee_id）
+├── name
+├── department
+├── status [active|inactive]（默认 active；分配/转移拒绝 inactive 员工）
+├── notes
+├── created_at
+└── updated_at
+
+user（系统账号）
+├── id PK
+├── employee_id UNIQUE NOT NULL（登录用工号）
+├── name
+├── department
+├── phone
+├── email
+├── role [admin|employee]
+├── password_hash
+└── created_at
+
+asset_application（资产申请）
+├── id PK
+├── applicant_id → user
+├── asset_category
+├── reason
+├── status [pending|approved|rejected|fulfilled]
+├── admin_id → user
+├── admin_notes
+├── approved_at
 └── created_at
 
 打印机墨粉（printer_consumable）        activity_log
@@ -240,7 +253,7 @@ in_stock ──assign──> assigned ──return──> in_stock
 
 ## 路由清单
 
-### 页面路由（22 条）
+### 页面路由（21 条）
 
 | 路径 | 角色 | 模板 |
 |------|------|------|
@@ -266,9 +279,9 @@ in_stock ──assign──> assigned ──return──> in_stock
 | `/my/applications` | employee | employee/applications.html |
 | `/my/applications/new` | employee | employee/application_form.html |
 
-### API 路由（92 条）
+### API 路由（53 条）
 
-**认证**：`POST /api/login`、`POST /api/logout`、`GET /api/me`
+**认证**：`POST /api/login`、`POST /api/logout`、`GET /api/me`、`POST /api/change-password`（自助改密，校验旧密码，写 activity_log）
 
 **资产 CRUD**：`GET/POST /api/assets`、`GET/PUT/DELETE /api/assets/<id>`
 
@@ -292,6 +305,7 @@ in_stock ──assign──> assigned ──return──> in_stock
 **员工**：`GET /api/employees`、`POST /api/employees`、`PUT /api/employees/<id>`、`DELETE /api/employees/<id>`、`POST /api/employees/import`、`GET /api/employees/import/template`
 
 **耗材**：`GET /api/consumables`、`POST /api/consumables`、`GET/PUT/DELETE /api/consumables/<id>`、`POST /api/consumables/<id>/adjust`、`POST /api/consumables/<id>/replace`、`GET /api/consumables/<id>/replacements`、`GET /api/printers/consumables`
+　　　　 `GET /api/consumables/replacements`（全局更替历史，按打印机/颜色/日期筛选 + 分页）、`GET /api/consumables/cost-summary`（耗材成本汇总：总花费/更换次数/明细/月趋势）
 
 **标签**：`GET /api/assets/<id>/qr`、`POST /api/batch-labels`
 
@@ -310,7 +324,7 @@ in_stock ──assign──> assigned ──return──> in_stock
 
 **健康检查**：`GET /api/health`（无需认证，返回 DB 连通性）
 
-**公开**：`GET /api/public/asset/<id>`（扫码页用，无需认证）
+**公开**：`GET /api/public/asset/<id>`（按数字 id，扫码页用，无需认证）、`GET /api/public/asset-lookup?asset_tag=`（按资产标签号查，alias `tag`，无需认证）
 
 - 公开扫码相关页面只展示最小必要字段，匿名流不得复用 `/api/assets` 列表接口或暴露持有人/部门等敏感数据。
 - 前端渲染数据库内容时优先使用 textContent / createElement；避免把资产字段直接拼进 innerHTML。
