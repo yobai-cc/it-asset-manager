@@ -1,4 +1,5 @@
 """IT 资产管理 MVP — Flask 应用"""
+from functools import wraps
 import csv
 import io
 import json
@@ -63,9 +64,9 @@ def _parse_positive_int_arg(name, default, max_value=None):
     try:
         value = int(raw)
     except (TypeError, ValueError):
-        return None, (jsonify({"error": f"{name} 必须是正整数"}), 400)
+        return None, api_error(f"{name} 必须是正整数", 400)
     if value < 1:
-        return None, (jsonify({"error": f"{name} 必须是正整数"}), 400)
+        return None, api_error(f"{name} 必须是正整数", 400)
     if max_value is not None:
         value = min(value, max_value)
     return value, None
@@ -77,7 +78,7 @@ def _parse_iso_date(value, field_name):
     try:
         return date.fromisoformat(value), None
     except (TypeError, ValueError):
-        return None, (jsonify({"error": f"{field_name} 必须是 YYYY-MM-DD 日期"}), 400)
+        return None, api_error(f"{field_name} 必须是 YYYY-MM-DD 日期", 400)
 
 
 def _employee_id_for_user(user):
@@ -96,12 +97,12 @@ def _validate_non_negative_int(data, field_name, required=False):
     val = data.get(field_name)
     if val is None:
         if required:
-            return None, (jsonify({"error": f"缺少必填字段: {field_name}"}), 400)
+            return None, api_error(f"缺少必填字段: {field_name}", 400)
         return None, None
     if isinstance(val, bool) or not isinstance(val, int):
-        return None, (jsonify({"error": f"{field_name} 必须是整数"}), 400)
+        return None, api_error(f"{field_name} 必须是整数", 400)
     if val < 0:
-        return None, (jsonify({"error": f"{field_name} 不能为负数"}), 400)
+        return None, api_error(f"{field_name} 不能为负数", 400)
     return val, None
 
 
@@ -111,9 +112,9 @@ def _validate_non_negative_number(data, field_name, allow_none=True):
     if val is None:
         return None, None
     if isinstance(val, bool) or not isinstance(val, (int, float)):
-        return None, (jsonify({"error": f"{field_name} 必须是数字"}), 400)
+        return None, api_error(f"{field_name} 必须是数字", 400)
     if val < 0:
-        return None, (jsonify({"error": f"{field_name} 不能为负数"}), 400)
+        return None, api_error(f"{field_name} 不能为负数", 400)
     return val, None
 
 
@@ -123,13 +124,13 @@ def _validate_printer_asset_id(conn, asset_id):
         return True, None
     row = conn.execute("SELECT category, status, deleted_at FROM asset WHERE id = ?", (asset_id,)).fetchone()
     if not row:
-        return False, (jsonify({"error": "关联资产不存在"}), 400)
+        return False, api_error("关联资产不存在", 400)
     if row["deleted_at"]:
-        return False, (jsonify({"error": "关联打印机已删除，不能绑定耗材"}), 400)
+        return False, api_error("关联打印机已删除，不能绑定耗材", 400)
     if row["status"] == "scrapped":
-        return False, (jsonify({"error": "关联打印机已报废，不能绑定耗材"}), 400)
+        return False, api_error("关联打印机已报废，不能绑定耗材", 400)
     if row["category"] != "printer":
-        return False, (jsonify({"error": "耗材只能关联打印机类资产"}), 400)
+        return False, api_error("耗材只能关联打印机类资产", 400)
     return True, None
 
 
@@ -141,9 +142,9 @@ def _check_printer_operational(conn, asset_id, action_label="执行耗材操作"
     if not row:
         return True, None  # Asset was deleted permanently, not a printer-level block
     if row["deleted_at"]:
-        return False, (jsonify({"error": f"关联打印机已删除，不能{action_label}"}), 400)
+        return False, api_error(f"关联打印机已删除，不能{action_label}", 400)
     if row["status"] == "scrapped":
-        return False, (jsonify({"error": f"关联打印机已报废，不能{action_label}"}), 400)
+        return False, api_error(f"关联打印机已报废，不能{action_label}", 400)
     return True, None
 
 
@@ -197,20 +198,71 @@ def current_user():
         return dict(row) if row else None
 
 
-def require_role(*roles):
-    user = current_user()
-    if not user or user["role"] not in roles:
-        return None
-    return user
+# ---- 错误响应 / 鉴权装饰器 ----
+
+class ApiError(Exception):
+    """API 业务异常：携带 message + HTTP status，由全局 errorhandler 转 JSON 响应。
+    供 DB/校验层抛出（如 _get_asset_for_update），避免把 HTTP 响应泄漏进辅助函数。"""
+
+    def __init__(self, message, status=400):
+        super().__init__(message)
+        self.message = message
+        self.status = status
+
+
+def api_error(message, status=400):
+    """统一 JSON 错误响应：返回 {"error": message} + status。"""
+    return jsonify({"error": message}), status
+
+
+def _auth_failure(status, message):
+    """鉴权失败：API 端点返回 JSON 错误，页面端点重定向到登录页。"""
+    if request.path.startswith("/api/"):
+        return api_error(message, status)
+    return redirect(url_for("login_page"))
+
+
+def login_required(view):
+    """要求已登录（任意角色）。失败：API→api_error("未登录",401)，页面→/login。"""
+
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        user = current_user()
+        if not user:
+            return _auth_failure(401, "未登录")
+        g.user = user
+        return view(*args, **kwargs)
+
+    return wrapped
+
+
+def admin_required(view):
+    """要求 admin 角色；未登录或非 admin 均视为失败。
+    失败：API→api_error("权限不足",403)，页面→/login。注意：未登录也是 403（非 401）。"""
+
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        user = current_user()
+        if not user or user["role"] != "admin":
+            return _auth_failure(403, "权限不足")
+        g.user = user
+        return view(*args, **kwargs)
+
+    return wrapped
+
+
+@app.errorhandler(ApiError)
+def _handle_api_error(e):
+    """全局业务异常处理：ApiError → 统一 JSON 错误响应。"""
+    return api_error(e.message, e.status)
 
 
 # ---- 页面路由 ----
 
 @app.route("/")
+@login_required
 def index():
-    user = current_user()
-    if not user:
-        return redirect(url_for("login_page"))
+    user = g.user
     if user["role"] == "admin":
         return redirect(url_for("admin_dashboard"))
     return redirect(url_for("my_assets"))
@@ -222,50 +274,44 @@ def login_page():
 
 
 @app.route("/dashboard")
+@admin_required
 def admin_dashboard():
-    user = require_role("admin")
-    if not user:
-        return redirect(url_for("login_page"))
+    user = g.user
     return render_template("admin/dashboard.html", user=user)
 
 
 @app.route("/assets")
+@admin_required
 def asset_list_page():
-    user = require_role("admin")
-    if not user:
-        return redirect(url_for("login_page"))
+    user = g.user
     return render_template("admin/assets.html", user=user)
 
 
 @app.route("/assets/new")
+@admin_required
 def asset_new_page():
-    user = require_role("admin")
-    if not user:
-        return redirect(url_for("login_page"))
+    user = g.user
     return render_template("admin/asset_form.html", user=user, asset=None)
 
 
 @app.route("/assets/<int:asset_id>")
+@admin_required
 def asset_detail_page(asset_id):
-    user = require_role("admin")
-    if not user:
-        return redirect(url_for("login_page"))
+    user = g.user
     return render_template("admin/asset_detail.html", user=user, asset_id=asset_id)
 
 
 @app.route("/assets/<int:asset_id>/edit")
+@admin_required
 def asset_edit_page(asset_id):
-    user = require_role("admin")
-    if not user:
-        return redirect(url_for("login_page"))
+    user = g.user
     return render_template("admin/asset_form.html", user=user, asset_id=asset_id)
 
 
 @app.route("/assets/<int:asset_id>/label")
+@admin_required
 def asset_label_page(asset_id):
-    user = require_role("admin")
-    if not user:
-        return redirect(url_for("login_page"))
+    user = g.user
     db = get_db()
     with db.get_conn() as conn:
         row = conn.execute("SELECT deleted_at FROM asset WHERE id = ?", (asset_id,)).fetchone()
@@ -275,26 +321,23 @@ def asset_label_page(asset_id):
 
 
 @app.route("/applications")
+@admin_required
 def applications_page():
-    user = require_role("admin")
-    if not user:
-        return redirect(url_for("login_page"))
+    user = g.user
     return render_template("admin/applications.html", user=user)
 
 
 @app.route("/maintenance")
+@admin_required
 def maintenance_page():
-    user = require_role("admin")
-    if not user:
-        return redirect(url_for("login_page"))
+    user = g.user
     return render_template("admin/maintenance.html", user=user)
 
 
 @app.route("/consumables")
+@admin_required
 def consumables_page():
-    user = require_role("admin")
-    if not user:
-        return redirect(url_for("login_page"))
+    user = g.user
     # Fetch printer-consumables data for server-side rendering
     db = get_db()
     printers_data = []
@@ -382,52 +425,46 @@ def consumables_page():
 
 
 @app.route("/users")
+@admin_required
 def users_page():
-    user = require_role("admin")
-    if not user:
-        return redirect(url_for("login_page"))
+    user = g.user
     return render_template("admin/users.html", user=user)
 
 
 @app.route("/employees")
+@admin_required
 def employees_page():
-    user = require_role("admin")
-    if not user:
-        return redirect(url_for("login_page"))
+    user = g.user
     return render_template("admin/employees.html", user=user)
 
 
 # ---- 员工自助页面 ----
 
 @app.route("/my/assets")
+@login_required
 def my_assets():
-    user = current_user()
-    if not user:
-        return redirect(url_for("login_page"))
+    user = g.user
     return render_template("employee/my_assets.html", user=user)
 
 
 @app.route("/my/assets/<int:asset_id>")
+@login_required
 def my_asset_detail(asset_id):
-    user = current_user()
-    if not user:
-        return redirect(url_for("login_page"))
+    user = g.user
     return render_template("employee/asset_detail.html", user=user, asset_id=asset_id)
 
 
 @app.route("/my/applications")
+@login_required
 def my_applications():
-    user = current_user()
-    if not user:
-        return redirect(url_for("login_page"))
+    user = g.user
     return render_template("employee/applications.html", user=user)
 
 
 @app.route("/my/applications/new")
+@login_required
 def my_application_new():
-    user = current_user()
-    if not user:
-        return redirect(url_for("login_page"))
+    user = g.user
     return render_template("employee/application_form.html", user=user)
 
 
@@ -444,15 +481,15 @@ def api_login():
             'SELECT * FROM "user" WHERE employee_id = ?', (employee_id,)
         ).fetchone()
         if not row:
-            return jsonify({"error": "用户不存在"}), 401
+            return api_error("用户不存在", 401)
         user = dict(row)
         # 兼容哈希密码和明文密码（迁移期间）
         if user["password_hash"]:
             if "$" in user["password_hash"]:
                 if not check_password_hash(user["password_hash"], password):
-                    return jsonify({"error": "密码错误"}), 401
+                    return api_error("密码错误", 401)
             elif user["password_hash"] != password:
-                return jsonify({"error": "密码错误"}), 401
+                return api_error("密码错误", 401)
         session["user_id"] = user["id"]
         session["role"] = user["role"]
         logger.info("User %s (role=%s) logged in", employee_id, user["role"])
@@ -467,27 +504,26 @@ def api_logout():
 
 
 @app.route("/api/change-password", methods=["POST"])
+@login_required
 def api_change_password():
-    user = current_user()
-    if not user:
-        return jsonify({"error": "未登录"}), 401
+    user = g.user
     data = request.get_json() or {}
     old_password = data.get("old_password", "")
     new_password = data.get("new_password", "")
     if not old_password or not new_password:
-        return jsonify({"error": "旧密码和新密码不能为空"}), 400
+        return api_error("旧密码和新密码不能为空", 400)
     db = get_db()
     with db.get_conn() as conn:
         row = conn.execute('SELECT * FROM "user" WHERE id = ?', (user["id"],)).fetchone()
         if not row:
-            return jsonify({"error": "用户不存在"}), 404
+            return api_error("用户不存在", 404)
         pw_row = dict(row)
         stored = pw_row["password_hash"] or ""
         if "$" in stored:
             if not check_password_hash(stored, old_password):
-                return jsonify({"error": "旧密码错误"}), 400
+                return api_error("旧密码错误", 400)
         elif stored != old_password:
-            return jsonify({"error": "旧密码错误"}), 400
+            return api_error("旧密码错误", 400)
         conn.execute(
             'UPDATE "user" SET password_hash = ? WHERE id = ?',
             (generate_password_hash(new_password), user["id"]),
@@ -497,16 +533,16 @@ def api_change_password():
 
 
 @app.route("/api/me")
+@login_required
 def api_me():
-    user = current_user()
-    if not user:
-        return jsonify({"error": "未登录"}), 401
+    user = g.user
     return jsonify({"user": _user_dict(user)})
 
 
 # ---- API: 仪表盘统计 ----
 
 @app.route("/api/stats")
+@admin_required
 def api_stats():
     db = get_db()
     with db.get_conn() as conn:
@@ -555,25 +591,24 @@ def api_stats():
 # ---- API: 批量导入 ----
 
 @app.route("/api/assets/import", methods=["POST"])
+@admin_required
 def api_assets_import():
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     if "file" not in request.files:
-        return jsonify({"error": "未上传文件"}), 400
+        return api_error("未上传文件", 400)
     f = request.files["file"]
     if not f.filename:
-        return jsonify({"error": "文件名为空"}), 400
+        return api_error("文件名为空", 400)
 
     raw = f.read().decode("utf-8-sig")  # utf-8-sig 自动处理 BOM
     reader = csv.DictReader(io.StringIO(raw))
     if not reader.fieldnames:
-        return jsonify({"error": "CSV 文件为空"}), 400
+        return api_error("CSV 文件为空", 400)
 
     required_cols = {"name", "category"}
     missing = required_cols - set(reader.fieldnames)
     if missing:
-        return jsonify({"error": f"缺少必填列: {', '.join(missing)}"}), 400
+        return api_error(f"缺少必填列: {', '.join(missing)}", 400)
 
     db = get_db()
     success = 0
@@ -630,10 +665,9 @@ def api_assets_import():
 # ---- API: 资产 CRUD ----
 
 @app.route("/api/assets", methods=["GET"])
+@admin_required
 def api_assets_list():
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     db = get_db()
     category = request.args.get("category")
     status = request.args.get("status")
@@ -689,25 +723,24 @@ def api_assets_list():
 
 
 @app.route("/api/assets", methods=["POST"])
+@admin_required
 def api_assets_create():
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     data = request.get_json() or {}
     required = ["name", "category"]
     for f in required:
         if not data.get(f):
-            return jsonify({"error": f"缺少必填字段: {f}"}), 400
+            return api_error(f"缺少必填字段: {f}", 400)
     if data["category"] not in VALID_CATEGORIES:
-        return jsonify({"error": f"无效的分类: {data['category']}"}), 400
+        return api_error(f"无效的分类: {data['category']}", 400)
 
     # Validate printer_type for printer assets
     printer_type = data.get("printer_type")
     if printer_type is not None:
         if data["category"] != "printer":
-            return jsonify({"error": "printer_type 仅适用于打印机类资产"}), 400
+            return api_error("printer_type 仅适用于打印机类资产", 400)
         if printer_type not in VALID_PRINTER_TYPES:
-            return jsonify({"error": f"无效的打印机类型: {printer_type}，可选: {', '.join(VALID_PRINTER_TYPES)}"}), 400
+            return api_error(f"无效的打印机类型: {printer_type}，可选: {', '.join(VALID_PRINTER_TYPES)}", 400)
 
     db = get_db()
     with db.get_conn() as conn:
@@ -738,10 +771,9 @@ def api_assets_create():
 
 
 @app.route("/api/assets/<int:asset_id>", methods=["GET"])
+@login_required
 def api_assets_get(asset_id):
-    user = current_user()
-    if not user:
-        return jsonify({"error": "未登录"}), 401
+    user = g.user
     db = get_db()
     with db.get_conn() as conn:
         row = conn.execute(
@@ -751,16 +783,16 @@ def api_assets_get(asset_id):
             (asset_id,),
         ).fetchone()
         if not row:
-            return jsonify({"error": "资产不存在"}), 404
+            return api_error("资产不存在", 404)
         # admin 可看所有（含回收站）
         if user["role"] != "admin":
             # employee: 只能看自己持有且未删除的
             if row["deleted_at"]:
-                return jsonify({"error": "资产不存在"}), 404
+                return api_error("资产不存在", 404)
             emp = conn.execute("SELECT id FROM employee WHERE employee_id = ?",
                                (user["employee_id"],)).fetchone()
             if not emp or row["current_holder_id"] != emp["id"]:
-                return jsonify({"error": "资产不存在"}), 404
+                return api_error("资产不存在", 404)
         events = [dict(r) for r in conn.execute(
             """SELECT le.*, u.name as operator_name
                FROM lifecycle_event le JOIN "user" u ON le.operator_id = u.id
@@ -780,22 +812,21 @@ def api_assets_get(asset_id):
 
 
 @app.route("/api/assets/<int:asset_id>", methods=["PUT"])
+@admin_required
 def api_assets_update(asset_id):
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     data = request.get_json() or {}
     db = get_db()
     with db.get_conn() as conn:
         row = conn.execute("SELECT * FROM asset WHERE id = ?", (asset_id,)).fetchone()
         if not row:
-            return jsonify({"error": "资产不存在"}), 404
+            return api_error("资产不存在", 404)
         if row["deleted_at"]:
-            return jsonify({"error": "资产已删除，无法编辑"}), 400
+            return api_error("资产已删除，无法编辑", 400)
         current = dict(row)
         effective_category = data.get("category", current["category"])
         if "category" in data and effective_category not in VALID_CATEGORIES:
-            return jsonify({"error": f"无效的分类: {effective_category}"}), 400
+            return api_error(f"无效的分类: {effective_category}", 400)
         fields = []
         params = []
         for col in ["name", "brand", "model", "serial_number", "location",
@@ -807,9 +838,9 @@ def api_assets_update(asset_id):
         if "printer_type" in data:
             pt = data["printer_type"]
             if effective_category != "printer":
-                return jsonify({"error": "printer_type 仅适用于打印机类资产"}), 400
+                return api_error("printer_type 仅适用于打印机类资产", 400)
             if pt is not None and pt not in VALID_PRINTER_TYPES:
-                return jsonify({"error": f"无效的打印机类型: {pt}，可选: {', '.join(VALID_PRINTER_TYPES)}"}), 400
+                return api_error(f"无效的打印机类型: {pt}，可选: {', '.join(VALID_PRINTER_TYPES)}", 400)
             fields.append("printer_type = ?")
             params.append(pt)
         elif "category" in data and effective_category != "printer" and current.get("printer_type") is not None:
@@ -831,22 +862,21 @@ def api_assets_update(asset_id):
 
 
 @app.route("/api/assets/<int:asset_id>", methods=["DELETE"])
+@admin_required
 def api_assets_delete(asset_id):
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     data = request.get_json(silent=True) or {}
     reason = (data.get("reason") or "").strip()
     db = get_db()
     with db.get_conn() as conn:
         row = conn.execute("SELECT * FROM asset WHERE id = ?", (asset_id,)).fetchone()
         if not row:
-            return jsonify({"error": "资产不存在"}), 404
+            return api_error("资产不存在", 404)
         a = dict(row)
         if a.get("deleted_at"):
-            return jsonify({"error": "资产已在回收站"}), 400
+            return api_error("资产已在回收站", 400)
         if a["status"] != "in_stock" and not reason:
-            return jsonify({"error": "非库存资产必须填写删除原因"}), 400
+            return api_error("非库存资产必须填写删除原因", 400)
         snapshot = json.dumps({k: a[k] for k in ("status", "current_holder_id", "location", "asset_tag", "name")}, ensure_ascii=False)
         conn.execute(
             """UPDATE asset SET deleted_at = CURRENT_TIMESTAMP, deleted_by = ?,
@@ -861,10 +891,9 @@ def api_assets_delete(asset_id):
 
 
 @app.route("/api/assets/batch-delete", methods=["POST"])
+@admin_required
 def api_assets_batch_delete():
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     data = request.get_json() or {}
     ids = data.get("ids", [])
     reason = (data.get("reason") or "").strip()
@@ -906,18 +935,17 @@ def api_assets_batch_delete():
 # ---- API: 回收站 ----
 
 @app.route("/api/assets/<int:asset_id>/restore", methods=["POST"])
+@admin_required
 def api_assets_restore(asset_id):
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     db = get_db()
     with db.get_conn() as conn:
         row = conn.execute("SELECT * FROM asset WHERE id = ?", (asset_id,)).fetchone()
         if not row:
-            return jsonify({"error": "资产不存在"}), 404
+            return api_error("资产不存在", 404)
         a = dict(row)
         if not a.get("deleted_at"):
-            return jsonify({"error": "资产不在回收站中"}), 400
+            return api_error("资产不在回收站中", 400)
         new_status = None
         clear_holder = False
         notes_suffix = ""
@@ -967,21 +995,20 @@ def api_assets_restore(asset_id):
 
 
 @app.route("/api/assets/<int:asset_id>/purge", methods=["DELETE"])
+@admin_required
 def api_assets_purge(asset_id):
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     data = request.get_json() or {}
     if data.get("confirm") != "DELETE":
-        return jsonify({"error": "必须传入 confirm: \"DELETE\" 以确认永久删除"}), 400
+        return api_error("必须传入 confirm: \"DELETE\" 以确认永久删除", 400)
     db = get_db()
     with db.get_conn() as conn:
         row = conn.execute("SELECT * FROM asset WHERE id = ?", (asset_id,)).fetchone()
         if not row:
-            return jsonify({"error": "资产不存在"}), 404
+            return api_error("资产不存在", 404)
         a = dict(row)
         if not a.get("deleted_at"):
-            return jsonify({"error": "只能永久删除回收站中的资产"}), 400
+            return api_error("只能永久删除回收站中的资产", 400)
         tag = a["asset_tag"]
         # Detach consumables with notes before deleting asset
         detached = conn.execute(
@@ -1003,10 +1030,9 @@ def api_assets_purge(asset_id):
 
 
 @app.route("/api/assets/batch-restore", methods=["POST"])
+@admin_required
 def api_assets_batch_restore():
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     data = request.get_json() or {}
     ids, err = _parse_id_list(data.get("ids", []))
     if err:
@@ -1066,13 +1092,12 @@ def api_assets_batch_restore():
 
 
 @app.route("/api/assets/batch-purge", methods=["POST"])
+@admin_required
 def api_assets_batch_purge():
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     data = request.get_json() or {}
     if data.get("confirm") != "DELETE":
-        return jsonify({"error": "必须传入 confirm: \"DELETE\" 以确认永久删除"}), 400
+        return api_error("必须传入 confirm: \"DELETE\" 以确认永久删除", 400)
     ids, err = _parse_id_list(data.get("ids", []))
     if err:
         return err
@@ -1106,24 +1131,21 @@ def api_assets_batch_purge():
 # ---- API: 生命周期操作 ----
 
 @app.route("/api/assets/<int:asset_id>/assign", methods=["POST"])
+@admin_required
 def api_assign(asset_id):
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     data = request.get_json() or {}
     target_employee_id = data.get("target_employee_id")
     if not target_employee_id:
-        return jsonify({"error": "缺少 target_employee_id"}), 400
+        return api_error("缺少 target_employee_id", 400)
     db = get_db()
     with db.get_conn() as conn:
         asset = _get_asset_for_update(conn, asset_id, "assign")
-        if isinstance(asset, tuple):
-            return asset
         emp = conn.execute("SELECT id, status FROM employee WHERE id = ?", (target_employee_id,)).fetchone()
         if not emp:
-            return jsonify({"error": "员工不存在"}), 400
+            return api_error("员工不存在", 400)
         if emp["status"] != "active":
-            return jsonify({"error": "不能分配给停用员工"}), 400
+            return api_error("不能分配给停用员工", 400)
         conn.execute(
             "UPDATE asset SET status = 'assigned', current_holder_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (target_employee_id, asset_id),
@@ -1139,16 +1161,13 @@ def api_assign(asset_id):
 
 
 @app.route("/api/assets/<int:asset_id>/return", methods=["POST"])
+@admin_required
 def api_return(asset_id):
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     data = request.get_json() or {}
     db = get_db()
     with db.get_conn() as conn:
         asset = _get_asset_for_update(conn, asset_id, "return")
-        if isinstance(asset, tuple):
-            return asset
         conn.execute(
             "UPDATE asset SET status = 'in_stock', current_holder_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (asset_id,),
@@ -1164,24 +1183,21 @@ def api_return(asset_id):
 
 
 @app.route("/api/assets/<int:asset_id>/transfer", methods=["POST"])
+@admin_required
 def api_transfer(asset_id):
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     data = request.get_json() or {}
     target_employee_id = data.get("target_employee_id")
     if not target_employee_id:
-        return jsonify({"error": "缺少 target_employee_id"}), 400
+        return api_error("缺少 target_employee_id", 400)
     db = get_db()
     with db.get_conn() as conn:
         asset = _get_asset_for_update(conn, asset_id, "transfer")
-        if isinstance(asset, tuple):
-            return asset
         emp = conn.execute("SELECT id, status FROM employee WHERE id = ?", (target_employee_id,)).fetchone()
         if not emp:
-            return jsonify({"error": "员工不存在"}), 400
+            return api_error("员工不存在", 400)
         if emp["status"] != "active":
-            return jsonify({"error": "不能转移给停用员工"}), 400
+            return api_error("不能转移给停用员工", 400)
         conn.execute(
             "UPDATE asset SET current_holder_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (target_employee_id, asset_id),
@@ -1197,18 +1213,15 @@ def api_transfer(asset_id):
 
 
 @app.route("/api/assets/<int:asset_id>/maintenance", methods=["POST"])
+@admin_required
 def api_maintenance_start(asset_id):
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     data = request.get_json() or {}
     if not data.get("description"):
-        return jsonify({"error": "缺少故障描述"}), 400
+        return api_error("缺少故障描述", 400)
     db = get_db()
     with db.get_conn() as conn:
         asset = _get_asset_for_update(conn, asset_id, "maintenance_start")
-        if isinstance(asset, tuple):
-            return asset
         conn.execute(
             "UPDATE asset SET status = 'maintenance', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (asset_id,),
@@ -1232,23 +1245,20 @@ def api_maintenance_start(asset_id):
 
 
 @app.route("/api/assets/<int:asset_id>/maintenance/<int:record_id>/resolve", methods=["POST"])
+@admin_required
 def api_maintenance_resolve(asset_id, record_id):
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     data = request.get_json() or {}
     return_to_stock = data.get("return_to_stock", False)
     db = get_db()
     with db.get_conn() as conn:
         asset = _get_asset_for_update(conn, asset_id, "maintenance_end")
-        if isinstance(asset, tuple):
-            return asset
         record = conn.execute(
             "SELECT * FROM maintenance_record WHERE id = ? AND asset_id = ?",
             (record_id, asset_id),
         ).fetchone()
         if not record:
-            return jsonify({"error": "维修记录不存在"}), 404
+            return api_error("维修记录不存在", 404)
         conn.execute(
             """UPDATE maintenance_record SET status = 'resolved', cost = ?, repair_notes = ?,
                resolved_at = CURRENT_TIMESTAMP WHERE id = ?""",
@@ -1275,17 +1285,14 @@ def api_maintenance_resolve(asset_id, record_id):
 
 
 @app.route("/api/assets/<int:asset_id>/scrap", methods=["POST"])
+@admin_required
 def api_scrap(asset_id):
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     data = request.get_json() or {}
     db = get_db()
     detached_consumables = 0
     with db.get_conn() as conn:
         asset = _get_asset_for_update(conn, asset_id, "scrap")
-        if isinstance(asset, tuple):
-            return asset
         # If printer, detach all consumables
         if asset["category"] == "printer":
             detached = conn.execute(
@@ -1341,10 +1348,9 @@ def api_asset_events(asset_id):
 # ---- API: 维修记录 ----
 
 @app.route("/api/maintenance")
+@admin_required
 def api_maintenance_list():
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     db = get_db()
     status = request.args.get("status")
     with db.get_conn() as conn:
@@ -1381,10 +1387,10 @@ def api_asset_maintenance(asset_id):
 # ---- API: 资产申请 ----
 
 @app.route("/api/applications", methods=["GET"])
+@admin_required
 def api_applications_list():
     db = get_db()
     status = request.args.get("status")
-    user = current_user()
     with db.get_conn() as conn:
         q = """SELECT aa.*, u.name as applicant_name, u.department as applicant_dept,
                a.name as admin_name
@@ -1396,9 +1402,6 @@ def api_applications_list():
         if status:
             clauses.append("aa.status = ?")
             params.append(status)
-        if user and user["role"] == "employee":
-            clauses.append("aa.applicant_id = ?")
-            params.append(user["id"])
         if clauses:
             q += " WHERE " + " AND ".join(clauses)
         q += " ORDER BY aa.created_at DESC"
@@ -1407,13 +1410,12 @@ def api_applications_list():
 
 
 @app.route("/api/applications", methods=["POST"])
+@login_required
 def api_applications_create():
-    user = current_user()
-    if not user:
-        return jsonify({"error": "未登录"}), 401
+    user = g.user
     data = request.get_json() or {}
     if not data.get("reason"):
-        return jsonify({"error": "缺少申请理由"}), 400
+        return api_error("缺少申请理由", 400)
     db = get_db()
     with db.get_conn() as conn:
         cursor = conn.execute(
@@ -1431,18 +1433,17 @@ def api_applications_create():
 
 
 @app.route("/api/applications/<int:app_id>/approve", methods=["PUT"])
+@admin_required
 def api_applications_approve(app_id):
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     data = request.get_json() or {}
     db = get_db()
     with db.get_conn() as conn:
         row = conn.execute("SELECT * FROM asset_application WHERE id = ?", (app_id,)).fetchone()
         if not row:
-            return jsonify({"error": "申请不存在"}), 404
+            return api_error("申请不存在", 404)
         if dict(row)["status"] != "pending":
-            return jsonify({"error": "申请已被处理"}), 400
+            return api_error("申请已被处理", 400)
         conn.execute(
             """UPDATE asset_application SET status = 'approved', admin_id = ?,
                admin_notes = ?, approved_at = CURRENT_TIMESTAMP WHERE id = ?""",
@@ -1458,18 +1459,17 @@ def api_applications_approve(app_id):
 
 
 @app.route("/api/applications/<int:app_id>/reject", methods=["PUT"])
+@admin_required
 def api_applications_reject(app_id):
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     data = request.get_json() or {}
     db = get_db()
     with db.get_conn() as conn:
         row = conn.execute("SELECT * FROM asset_application WHERE id = ?", (app_id,)).fetchone()
         if not row:
-            return jsonify({"error": "申请不存在"}), 404
+            return api_error("申请不存在", 404)
         if dict(row)["status"] != "pending":
-            return jsonify({"error": "申请已被处理"}), 400
+            return api_error("申请已被处理", 400)
         conn.execute(
             """UPDATE asset_application SET status = 'rejected', admin_id = ?,
                admin_notes = ?, approved_at = CURRENT_TIMESTAMP WHERE id = ?""",
@@ -1487,10 +1487,9 @@ def api_applications_reject(app_id):
 # ---- API: 员工自助 ----
 
 @app.route("/api/my/assets")
+@login_required
 def api_my_assets():
-    user = current_user()
-    if not user:
-        return jsonify({"error": "未登录"}), 401
+    user = g.user
     db = get_db()
     search = request.args.get("search")
     with db.get_conn() as conn:
@@ -1510,10 +1509,9 @@ def api_my_assets():
 
 
 @app.route("/api/my/applications")
+@login_required
 def api_my_applications():
-    user = current_user()
-    if not user:
-        return jsonify({"error": "未登录"}), 401
+    user = g.user
     db = get_db()
     with db.get_conn() as conn:
         rows = conn.execute(
@@ -1526,13 +1524,12 @@ def api_my_applications():
 
 
 @app.route("/api/my/applications", methods=["POST"])
+@login_required
 def api_my_applications_create():
-    user = current_user()
-    if not user:
-        return jsonify({"error": "未登录"}), 401
+    user = g.user
     data = request.get_json() or {}
     if not data.get("reason"):
-        return jsonify({"error": "缺少申请理由"}), 400
+        return api_error("缺少申请理由", 400)
     db = get_db()
     with db.get_conn() as conn:
         cursor = conn.execute(
@@ -1558,9 +1555,9 @@ def api_asset_qr(asset_id):
     with db.get_conn() as conn:
         row = conn.execute("SELECT * FROM asset WHERE id = ?", (asset_id,)).fetchone()
         if not row:
-            return jsonify({"error": "资产不存在"}), 404
+            return api_error("资产不存在", 404)
         if row["deleted_at"]:
-            return jsonify({"error": "资产已删除"}), 404
+            return api_error("资产已删除", 404)
     host = request.host_url.rstrip("/")
     qr_base = get_db().get_config("qr_base_url", host)
     qr_url = f"{qr_base}/scan/{asset_id}"
@@ -1576,22 +1573,21 @@ def api_asset_qr(asset_id):
 
 
 @app.route("/api/batch-labels", methods=["POST"])
+@admin_required
 def api_batch_labels():
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     data = request.get_json() or {}
     asset_ids = data.get("asset_ids", [])
     if not asset_ids:
-        return jsonify({"error": "未选择资产"}), 400
+        return api_error("未选择资产", 400)
     if not isinstance(asset_ids, list):
-        return jsonify({"error": "asset_ids 必须是数组"}), 400
+        return api_error("asset_ids 必须是数组", 400)
     try:
         asset_ids = [int(aid) for aid in asset_ids]
     except (TypeError, ValueError):
-        return jsonify({"error": "asset_ids 必须是数字 ID 数组"}), 400
+        return api_error("asset_ids 必须是数字 ID 数组", 400)
     if len(set(asset_ids)) != len(asset_ids):
-        return jsonify({"error": "asset_ids 不能重复"}), 400
+        return api_error("asset_ids 不能重复", 400)
     db = get_db()
     with db.get_conn() as conn:
         placeholders = ",".join("?" * len(asset_ids))
@@ -1601,10 +1597,10 @@ def api_batch_labels():
         found_ids = {row["id"] for row in rows}
         missing_ids = [aid for aid in asset_ids if aid not in found_ids]
         if missing_ids:
-            return jsonify({"error": f"资产不存在: {', '.join(map(str, missing_ids))}"}), 400
+            return api_error(f"资产不存在: {', '.join(map(str, missing_ids))}", 400)
         deleted_ids = [row["id"] for row in rows if row["deleted_at"]]
         if deleted_ids:
-            return jsonify({"error": f"资产已删除，无法打印标签: {', '.join(map(str, deleted_ids))}"}), 400
+            return api_error(f"资产已删除，无法打印标签: {', '.join(map(str, deleted_ids))}", 400)
         assets_by_id = {row["id"]: _asset_dict(row) for row in rows}
         assets = [assets_by_id[aid] for aid in asset_ids]
         # 记录打印事件
@@ -1625,14 +1621,14 @@ def _parse_id_list(ids, field_name="ids"):
     Rejects non-int/coerceable, zero, negative, and duplicate values.
     Returns (ids_list, error_response)."""
     if not isinstance(ids, list) or not ids:
-        return None, (jsonify({"error": f"{field_name} 必须为非空数组"}), 400)
+        return None, api_error(f"{field_name} 必须为非空数组", 400)
     result = []
     seen = set()
     for x in ids:
         if type(x) is not int or x <= 0:
-            return None, (jsonify({"error": f"{field_name} 包含无效值（必须为正整数）"}), 400)
+            return None, api_error(f"{field_name} 包含无效值（必须为正整数）", 400)
         if x in seen:
-            return None, (jsonify({"error": f"{field_name} 包含重复值 {x}"}), 400)
+            return None, api_error(f"{field_name} 包含重复值 {x}", 400)
         seen.add(x)
         result.append(x)
     return result, None
@@ -1643,32 +1639,32 @@ def _get_visible_asset(conn, asset_id, user):
     admin 可看全部（含回收站）；employee 只能看自己持有且未删除的；未登录 401。"""
     row = conn.execute("SELECT * FROM asset WHERE id = ?", (asset_id,)).fetchone()
     if not row:
-        return jsonify({"error": "资产不存在"}), 404
+        return api_error("资产不存在", 404)
     a = dict(row)
     if not user:
-        return jsonify({"error": "未登录"}), 401
+        return api_error("未登录", 401)
     if user["role"] == "admin":
         return a
     if a.get("deleted_at"):
-        return jsonify({"error": "资产不存在"}), 404
+        return api_error("资产不存在", 404)
     emp = conn.execute("SELECT id FROM employee WHERE employee_id = ?",
                        (user["employee_id"],)).fetchone()
     if not emp or a.get("current_holder_id") != emp["id"]:
-        return jsonify({"error": "资产不存在"}), 404
+        return api_error("资产不存在", 404)
     return a
 
 
 def _get_asset_for_update(conn, asset_id, event_type):
-    """获取资产并校验状态转换合法性，返回 (asset_dict) 或 (json_response, status_code)"""
+    """获取资产并校验状态转换合法性；失败抛 ApiError，由全局 errorhandler 转 JSON。"""
     row = conn.execute("SELECT * FROM asset WHERE id = ?", (asset_id,)).fetchone()
     if not row:
-        return jsonify({"error": "资产不存在"}), 404
+        raise ApiError("资产不存在", 404)
     asset = dict(row)
     if asset.get("deleted_at"):
-        return jsonify({"error": "资产已删除，无法执行操作"}), 400
+        raise ApiError("资产已删除，无法执行操作", 400)
     allowed = STATE_TRANSITIONS.get(asset["status"], [])
     if event_type not in allowed:
-        return jsonify({"error": f"当前状态 '{asset['status']}' 不允许执行 '{event_type}' 操作"}), 400
+        raise ApiError(f"当前状态 '{asset['status']}' 不允许执行 '{event_type}' 操作", 400)
     return asset
 
 
@@ -1746,14 +1742,13 @@ def api_label_settings():
 
 
 @app.route("/api/settings/label", methods=["PUT"])
+@admin_required
 def api_label_settings_update():
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     data = request.get_json() or {}
     fields = data.get("fields", [])
     if not isinstance(fields, list):
-        return jsonify({"error": "fields 必须是数组"}), 400
+        return api_error("fields 必须是数组", 400)
     fields = _normalize_label_fields(fields)
     db = get_db()
     with db.get_conn() as conn:
@@ -1772,14 +1767,13 @@ def api_qr_base_url():
 
 
 @app.route("/api/settings/qr-base-url", methods=["PUT"])
+@admin_required
 def api_qr_base_url_update():
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     data = request.get_json() or {}
     url = data.get("url", "").rstrip("/")
     if not url:
-        return jsonify({"error": "URL 不能为空"}), 400
+        return api_error("URL 不能为空", 400)
     db = get_db()
     with db.get_conn() as conn:
         db.set_config("qr_base_url", url, conn=conn)
@@ -1797,20 +1791,19 @@ def api_logo():
 
 
 @app.route("/api/settings/logo", methods=["POST"])
+@admin_required
 def api_logo_upload():
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     if "file" not in request.files:
-        return jsonify({"error": "未上传文件"}), 400
+        return api_error("未上传文件", 400)
     f = request.files["file"]
     if not f.filename:
-        return jsonify({"error": "文件名为空"}), 400
+        return api_error("文件名为空", 400)
     allowed = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".bmp"}
     import os as _os
     ext = _os.path.splitext(f.filename)[1].lower()
     if ext not in allowed:
-        return jsonify({"error": f"不支持的格式 {ext}，仅支持 {', '.join(allowed)}"}), 400
+        return api_error(f"不支持的格式 {ext}，仅支持 {', '.join(allowed)}", 400)
     save_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "static", "uploads")
     _os.makedirs(save_dir, exist_ok=True)
     save_path = _os.path.join(save_dir, "company_logo" + ext)
@@ -1824,10 +1817,9 @@ def api_logo_upload():
 
 
 @app.route("/api/settings/logo", methods=["DELETE"])
+@admin_required
 def api_logo_delete():
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     db = get_db()
     logo = db.get_config("company_logo", "")
     if logo:
@@ -1844,10 +1836,9 @@ def api_logo_delete():
 # ---- API: CSV 导出 ----
 
 @app.route("/api/assets/export")
+@admin_required
 def api_assets_export():
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     category = request.args.get("category")
     status = request.args.get("status")
     search = request.args.get("search")
@@ -1922,10 +1913,9 @@ def api_assets_export():
 # ---- API: 操作记录 ----
 
 @app.route("/api/activity")
+@admin_required
 def api_activity():
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     db = get_db()
     action = request.args.get("action")
     page, error = _parse_positive_int_arg("page", 1)
@@ -1958,10 +1948,9 @@ def api_activity():
 
 
 @app.route("/api/activity/export")
+@admin_required
 def api_activity_export():
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     action = request.args.get("action")
     db = get_db()
     where_clauses = []
@@ -2015,7 +2004,7 @@ def api_public_asset(asset_id):
             (asset_id,),
         ).fetchone()
         if not row or row["deleted_at"]:
-            return jsonify({"error": "资产不存在或已下架"}), 404
+            return api_error("资产不存在或已下架", 404)
     return jsonify(_public_asset_dict(row))
 
 
@@ -2023,7 +2012,7 @@ def api_public_asset(asset_id):
 def api_public_asset_lookup():
     asset_tag = (request.args.get("asset_tag") or request.args.get("tag") or "").strip()
     if not asset_tag:
-        return jsonify({"error": "缺少 asset_tag"}), 400
+        return api_error("缺少 asset_tag", 400)
     db = get_db()
     with db.get_conn() as conn:
         row = conn.execute(
@@ -2033,25 +2022,23 @@ def api_public_asset_lookup():
             (asset_tag,),
         ).fetchone()
         if not row or row["deleted_at"]:
-            return jsonify({"error": "资产不存在或已下架"}), 404
+            return api_error("资产不存在或已下架", 404)
     return jsonify(_public_asset_dict(row))
 
 
 # ---- 页面路由：新功能 ----
 
 @app.route("/settings")
+@admin_required
 def settings_page():
-    user = require_role("admin")
-    if not user:
-        return redirect(url_for("login_page"))
+    user = g.user
     return render_template("admin/settings.html", user=user)
 
 
 @app.route("/activity")
+@admin_required
 def activity_page():
-    user = require_role("admin")
-    if not user:
-        return redirect(url_for("login_page"))
+    user = g.user
     return render_template("admin/activity.html", user=user)
 
 
@@ -2069,10 +2056,9 @@ def scan_page(asset_id):
 # ---- API: 打印机耗材管理 ----
 
 @app.route("/api/consumables", methods=["GET"])
+@admin_required
 def api_consumables_list():
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     db = get_db()
     ctype = request.args.get("type")
     asset_id = request.args.get("asset_id")
@@ -2087,7 +2073,7 @@ def api_consumables_list():
         try:
             asset_id_int = int(asset_id)
         except ValueError:
-            return jsonify({"error": "asset_id 必须是整数"}), 400
+            return api_error("asset_id 必须是整数", 400)
         where_clauses.append("pc.asset_id = ?")
         params.append(asset_id_int)
     if low_stock:
@@ -2112,20 +2098,19 @@ def api_consumables_list():
 
 
 @app.route("/api/consumables", methods=["POST"])
+@admin_required
 def api_consumables_create():
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     data = request.get_json() or {}
 
     ctype = data.get("type", "toner")
     if ctype != "toner":
-        return jsonify({"error": f"墨粉管理只支持 toner 类型，收到: {ctype}"}), 400
+        return api_error(f"墨粉管理只支持 toner 类型，收到: {ctype}", 400)
 
     # Validate model (toner source: 原装/国产)
     cmodel = data.get("model")
     if cmodel is not None and cmodel not in VALID_TONER_MODELS:
-        return jsonify({"error": f"无效的墨粉型号: {cmodel}，可选: {', '.join(VALID_TONER_MODELS)}"}), 400
+        return api_error(f"无效的墨粉型号: {cmodel}，可选: {', '.join(VALID_TONER_MODELS)}", 400)
 
     stock, err = _validate_non_negative_int(data, "stock")
     if err:
@@ -2147,7 +2132,7 @@ def api_consumables_create():
     # Validate color for toner
     color = data.get("color")
     if color is not None and color not in VALID_TONER_COLORS:
-        return jsonify({"error": f"无效的墨粉颜色: {color}，可选: {', '.join(VALID_TONER_COLORS)}"}), 400
+        return api_error(f"无效的墨粉颜色: {color}，可选: {', '.join(VALID_TONER_COLORS)}", 400)
 
     db = get_db()
     with db.get_conn() as conn:
@@ -2194,10 +2179,9 @@ def api_consumables_create():
 
 
 @app.route("/api/consumables/<int:consumable_id>", methods=["GET"])
+@admin_required
 def api_consumables_get(consumable_id):
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     db = get_db()
     with db.get_conn() as conn:
         row = conn.execute(
@@ -2208,28 +2192,27 @@ def api_consumables_get(consumable_id):
                WHERE pc.id = ?""", (consumable_id,),
         ).fetchone()
         if not row:
-            return jsonify({"error": "耗材不存在"}), 404
+            return api_error("耗材不存在", 404)
     return jsonify(_consumable_usage_fields(row))
 
 
 @app.route("/api/consumables/<int:consumable_id>", methods=["PUT"])
+@admin_required
 def api_consumables_update(consumable_id):
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     data = request.get_json() or {}
 
     # Validate type if provided — only toner allowed
     if "type" in data and data["type"] != "toner":
-        return jsonify({"error": f"墨粉管理只支持 toner 类型，收到: {data['type']}"}), 400
+        return api_error(f"墨粉管理只支持 toner 类型，收到: {data['type']}", 400)
 
     # Validate model if provided
     if "model" in data and data["model"] is not None and data["model"] not in VALID_TONER_MODELS:
-        return jsonify({"error": f"无效的墨粉型号: {data['model']}，可选: {', '.join(VALID_TONER_MODELS)}"}), 400
+        return api_error(f"无效的墨粉型号: {data['model']}，可选: {', '.join(VALID_TONER_MODELS)}", 400)
 
     # Validate color if provided
     if "color" in data and data["color"] is not None and data["color"] not in VALID_TONER_COLORS:
-        return jsonify({"error": f"无效的墨粉颜色: {data['color']}，可选: {', '.join(VALID_TONER_COLORS)}"}), 400
+        return api_error(f"无效的墨粉颜色: {data['color']}，可选: {', '.join(VALID_TONER_COLORS)}", 400)
 
     # Validate numeric fields
     for field in ["stock", "threshold"]:
@@ -2250,7 +2233,7 @@ def api_consumables_update(consumable_id):
     with db.get_conn() as conn:
         row = conn.execute("SELECT * FROM printer_consumable WHERE id = ?", (consumable_id,)).fetchone()
         if not row:
-            return jsonify({"error": "耗材不存在"}), 404
+            return api_error("耗材不存在", 404)
 
         # Validate asset_id if provided
         if "asset_id" in data:
@@ -2290,15 +2273,14 @@ def api_consumables_update(consumable_id):
 
 
 @app.route("/api/consumables/<int:consumable_id>", methods=["DELETE"])
+@admin_required
 def api_consumables_delete(consumable_id):
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     db = get_db()
     with db.get_conn() as conn:
         row = conn.execute("SELECT * FROM printer_consumable WHERE id = ?", (consumable_id,)).fetchone()
         if not row:
-            return jsonify({"error": "耗材不存在"}), 404
+            return api_error("耗材不存在", 404)
         log_activity(conn, user["id"], "delete_consumable", "consumable", consumable_id,
                      f"删除耗材 {dict(row)['name']}")
         conn.execute("DELETE FROM printer_consumable WHERE id = ?", (consumable_id,))
@@ -2306,23 +2288,22 @@ def api_consumables_delete(consumable_id):
 
 
 @app.route("/api/consumables/<int:consumable_id>/adjust", methods=["POST"])
+@admin_required
 def api_consumables_adjust(consumable_id):
     """库存调整：delta 正数加库存，负数减库存"""
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     data = request.get_json() or {}
     delta = data.get("delta")
     if delta is None or not isinstance(delta, int):
-        return jsonify({"error": "delta 必须是整数"}), 400
+        return api_error("delta 必须是整数", 400)
     db = get_db()
     with db.get_conn() as conn:
         row = conn.execute("SELECT * FROM printer_consumable WHERE id = ?", (consumable_id,)).fetchone()
         if not row:
-            return jsonify({"error": "耗材不存在"}), 404
+            return api_error("耗材不存在", 404)
         new_stock = dict(row)["stock"] + delta
         if new_stock < 0:
-            return jsonify({"error": "库存不能低于 0"}), 400
+            return api_error("库存不能低于 0", 400)
         conn.execute(
             "UPDATE printer_consumable SET stock = ? WHERE id = ?",
             (new_stock, consumable_id),
@@ -2340,11 +2321,10 @@ def api_consumables_adjust(consumable_id):
 
 
 @app.route("/api/consumables/<int:consumable_id>/replace", methods=["POST"])
+@admin_required
 def api_consumables_replace(consumable_id):
     """更替当前耗材：归档旧周期，重置当前价格/安装日期，可选扣减备用库存。"""
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     data = request.get_json() or {}
     replaced_at = data.get("replaced_at") or date.today().isoformat()
     new_installed_at = data.get("new_installed_at") or replaced_at
@@ -2366,10 +2346,10 @@ def api_consumables_replace(consumable_id):
     with db.get_conn() as conn:
         row = conn.execute("SELECT * FROM printer_consumable WHERE id = ?", (consumable_id,)).fetchone()
         if not row:
-            return jsonify({"error": "耗材不存在"}), 404
+            return api_error("耗材不存在", 404)
         consumable = dict(row)
         if data.get("use_stock") and consumable["stock"] <= 0:
-            return jsonify({"error": "备用库存不足，不能从库存取用"}), 400
+            return api_error("备用库存不足，不能从库存取用", 400)
 
         # Check if bound printer is operational
         ok, err = _check_printer_operational(conn, consumable.get("asset_id"), "更换墨粉")
@@ -2420,15 +2400,14 @@ def api_consumables_replace(consumable_id):
 
 
 @app.route("/api/consumables/<int:consumable_id>/replacements", methods=["GET"])
+@admin_required
 def api_consumables_replacements(consumable_id):
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     db = get_db()
     with db.get_conn() as conn:
         row = conn.execute("SELECT id FROM printer_consumable WHERE id = ?", (consumable_id,)).fetchone()
         if not row:
-            return jsonify({"error": "耗材不存在"}), 404
+            return api_error("耗材不存在", 404)
         rows = conn.execute(
             """SELECT * FROM consumable_replacement
                WHERE consumable_id = ? ORDER BY replaced_at DESC, id DESC""",
@@ -2439,11 +2418,10 @@ def api_consumables_replacements(consumable_id):
 
 
 @app.route("/api/consumables/replacements", methods=["GET"])
+@admin_required
 def api_all_replacements():
     """全局更换历史，支持按打印机/颜色/日期范围筛选和分页。"""
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
 
     page, err = _parse_positive_int_arg("page", 1)
     if err:
@@ -2459,7 +2437,7 @@ def api_all_replacements():
     date_to = request.args.get("date_to")
 
     if color and color not in VALID_TONER_COLORS:
-        return jsonify({"error": f"无效颜色: {color}"}), 400
+        return api_error(f"无效颜色: {color}", 400)
 
     where_clauses = []
     params = []
@@ -2500,11 +2478,10 @@ def api_all_replacements():
 
 
 @app.route("/api/consumables/cost-summary", methods=["GET"])
+@admin_required
 def api_cost_summary():
     """耗材成本汇总：总花费、更换次数、按打印机明细、按月趋势。"""
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
 
     db = get_db()
     with db.get_conn() as conn:
@@ -2635,7 +2612,7 @@ def _validate_toner_color_for_printer(conn, asset_id, color):
     Returns (ok, error_response)."""
     printer_type = _get_printer_type(conn, asset_id)
     if printer_type == "mono":
-        return False, (jsonify({"error": "黑白打印机不允许彩色墨粉"}), 400)
+        return False, api_error("黑白打印机不允许彩色墨粉", 400)
     # color or unconfigured: allow (unconfigured defaults to allowing black only in UI,
     # but API lets it through since the user might be setting up a color printer)
     return True, None
@@ -2652,6 +2629,7 @@ def _infer_printer_type(consumables_rows):
 
 
 @app.route("/api/printers/consumables", methods=["GET"])
+@admin_required
 def api_printers_consumables():
     """打印机耗材聚合视图：按打印机分组返回耗材数据，排除标签打印机。
 
@@ -2659,9 +2637,7 @@ def api_printers_consumables():
       printer_type: "color" | "mono" — 按打印机类型筛选
       warning: "1" — 仅返回有低库存告警的打印机
     """
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
 
     printer_type_filter = request.args.get("printer_type")
     warning_only = request.args.get("warning") == "1"
@@ -2790,10 +2766,9 @@ def api_printers_consumables():
 # ---- API: 员工管理 ----
 
 @app.route("/api/employees", methods=["GET"])
+@admin_required
 def api_employees():
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     search = request.args.get("search")
     status = request.args.get("status", "active")
     db = get_db()
@@ -2804,7 +2779,7 @@ def api_employees():
         where = []
         if status != "all":
             if status not in ("active", "inactive"):
-                return jsonify({"error": "员工状态无效"}), 400
+                return api_error("员工状态无效", 400)
             where.append("e.status = ?")
             params.append(status)
         if search:
@@ -2818,14 +2793,13 @@ def api_employees():
 
 
 @app.route("/api/employees", methods=["POST"])
+@admin_required
 def api_employees_create():
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     data = request.get_json() or {}
     name = (data.get("name") or "").strip()
     if not name:
-        return jsonify({"error": "缺少员工姓名"}), 400
+        return api_error("缺少员工姓名", 400)
     department = _clean_optional_text(data.get("department"))
     notes = _clean_optional_text(data.get("notes"))
     db = get_db()
@@ -2842,24 +2816,23 @@ def api_employees_create():
 
 
 @app.route("/api/employees/<int:emp_id>", methods=["PUT"])
+@admin_required
 def api_employees_update(emp_id):
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     data = request.get_json() or {}
     db = get_db()
     with db.get_conn() as conn:
         row = conn.execute("SELECT * FROM employee WHERE id = ?", (emp_id,)).fetchone()
         if not row:
-            return jsonify({"error": "员工不存在"}), 404
+            return api_error("员工不存在", 404)
         name = (data.get("name", row["name"]) or "").strip()
         if not name:
-            return jsonify({"error": "缺少员工姓名"}), 400
+            return api_error("缺少员工姓名", 400)
         department = _clean_optional_text(data.get("department", row["department"]))
         notes = _clean_optional_text(data.get("notes", row["notes"]))
         status = data.get("status", row["status"])
         if status not in ("active", "inactive"):
-            return jsonify({"error": "员工状态无效"}), 400
+            return api_error("员工状态无效", 400)
         conn.execute(
             """UPDATE employee
                SET name = ?, department = ?, notes = ?, status = ?, updated_at = CURRENT_TIMESTAMP
@@ -2872,10 +2845,9 @@ def api_employees_update(emp_id):
 
 
 @app.route("/api/employees/<int:emp_id>", methods=["DELETE"])
+@admin_required
 def api_employees_delete(emp_id):
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     data = request.get_json(silent=True) or {}
     move_assets_to_stock = bool(data.get("move_assets_to_stock"))
     stock_location = (data.get("stock_location") or "库房").strip() or "库房"
@@ -2883,7 +2855,7 @@ def api_employees_delete(emp_id):
     with db.get_conn() as conn:
         row = conn.execute("SELECT * FROM employee WHERE id = ?", (emp_id,)).fetchone()
         if not row:
-            return jsonify({"error": "员工不存在"}), 404
+            return api_error("员工不存在", 404)
         assets = conn.execute(
             """SELECT id FROM asset
                WHERE current_holder_id = ? AND status != 'scrapped' AND deleted_at IS NULL""",
@@ -2924,10 +2896,9 @@ def api_employees_delete(emp_id):
 
 
 @app.route("/api/employees/import/template")
+@admin_required
 def api_employees_import_template():
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     output = io.StringIO()
     output.write('﻿')
     writer = csv.writer(output)
@@ -2941,25 +2912,24 @@ def api_employees_import_template():
 
 
 @app.route("/api/employees/import", methods=["POST"])
+@admin_required
 def api_employees_import():
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     if "file" not in request.files:
-        return jsonify({"error": "未上传文件"}), 400
+        return api_error("未上传文件", 400)
     f = request.files["file"]
     if not f.filename:
-        return jsonify({"error": "文件名为空"}), 400
+        return api_error("文件名为空", 400)
 
     raw = f.read().decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(raw))
     if not reader.fieldnames:
-        return jsonify({"error": "CSV 文件为空"}), 400
+        return api_error("CSV 文件为空", 400)
 
     required_cols = {"name"}
     missing = required_cols - set(reader.fieldnames)
     if missing:
-        return jsonify({"error": f"缺少必填列: {', '.join(missing)}"}), 400
+        return api_error(f"缺少必填列: {', '.join(missing)}", 400)
 
     db = get_db()
     created = 0
@@ -3034,10 +3004,9 @@ def api_employees_import():
 # ---- API: 管理员用户管理 ----
 
 @app.route("/api/users", methods=["GET"])
+@admin_required
 def api_users():
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     db = get_db()
     with db.get_conn() as conn:
         rows = conn.execute(
@@ -3047,17 +3016,16 @@ def api_users():
 
 
 @app.route("/api/users", methods=["POST"])
+@admin_required
 def api_users_create():
-    user = require_role("admin")
-    if not user:
-        return jsonify({"error": "权限不足"}), 403
+    user = g.user
     data = request.get_json() or {}
     for field in ["employee_id", "name", "password"]:
         if not data.get(field):
-            return jsonify({"error": f"缺少必填字段: {field}"}), 400
+            return api_error(f"缺少必填字段: {field}", 400)
     role = data.get("role", "employee")
     if role not in VALID_ROLES:
-        return jsonify({"error": f"无效角色: {role}"}), 400
+        return api_error(f"无效角色: {role}", 400)
 
     password_hash = generate_password_hash(data["password"])
 
@@ -3082,16 +3050,15 @@ def api_users_create():
             ).fetchone()
     except Exception as e:
         if "UNIQUE constraint" in str(e):
-            return jsonify({"error": f"工号已存在: {data['employee_id']}"}), 400
+            return api_error(f"工号已存在: {data['employee_id']}", 400)
         raise
     return jsonify(dict(row)), 201
 
 
 @app.route("/api/users/<int:user_id>", methods=["GET"])
+@admin_required
 def api_users_get(user_id):
-    admin = require_role("admin")
-    if not admin:
-        return jsonify({"error": "权限不足"}), 403
+    admin = g.user
     db = get_db()
     with db.get_conn() as conn:
         row = conn.execute(
@@ -3099,23 +3066,22 @@ def api_users_get(user_id):
             (user_id,),
         ).fetchone()
         if not row:
-            return jsonify({"error": "用户不存在"}), 404
+            return api_error("用户不存在", 404)
     return jsonify(dict(row))
 
 
 @app.route("/api/users/<int:user_id>", methods=["PUT"])
+@admin_required
 def api_users_update(user_id):
-    admin = require_role("admin")
-    if not admin:
-        return jsonify({"error": "权限不足"}), 403
+    admin = g.user
     data = request.get_json() or {}
     if "role" in data and data["role"] not in VALID_ROLES:
-        return jsonify({"error": f"无效角色: {data['role']}"}), 400
+        return api_error(f"无效角色: {data['role']}", 400)
     db = get_db()
     with db.get_conn() as conn:
         row = conn.execute('SELECT * FROM "user" WHERE id = ?', (user_id,)).fetchone()
         if not row:
-            return jsonify({"error": "用户不存在"}), 404
+            return api_error("用户不存在", 404)
 
         # Admin lockout protection: prevent downgrading last admin or self
         if "role" in data and data["role"] != "admin":
@@ -3123,13 +3089,13 @@ def api_users_update(user_id):
             if target.get("role") == "admin":
                 # Check if this is self-downgrade
                 if user_id == admin["id"]:
-                    return jsonify({"error": "不能降低自己的管理员角色"}), 400
+                    return api_error("不能降低自己的管理员角色", 400)
                 # Check if this is the last admin
                 admin_count = conn.execute(
                     'SELECT COUNT(*) as c FROM "user" WHERE role = "admin"'
                 ).fetchone()["c"]
                 if admin_count <= 1:
-                    return jsonify({"error": "不能降级系统最后一个管理员"}), 400
+                    return api_error("不能降级系统最后一个管理员", 400)
 
         fields = []
         params = []
@@ -3152,14 +3118,13 @@ def api_users_update(user_id):
 
 
 @app.route("/api/users/<int:user_id>/reset-password", methods=["POST"])
+@admin_required
 def api_users_reset_password(user_id):
-    admin = require_role("admin")
-    if not admin:
-        return jsonify({"error": "权限不足"}), 403
+    admin = g.user
     data = request.get_json() or {}
     new_password = data.get("new_password", "")
     if not new_password:
-        return jsonify({"error": "密码不能为空"}), 400
+        return api_error("密码不能为空", 400)
 
     password_hash = generate_password_hash(new_password)
 
@@ -3167,7 +3132,7 @@ def api_users_reset_password(user_id):
     with db.get_conn() as conn:
         row = conn.execute('SELECT * FROM "user" WHERE id = ?', (user_id,)).fetchone()
         if not row:
-            return jsonify({"error": "用户不存在"}), 404
+            return api_error("用户不存在", 404)
         conn.execute(
             'UPDATE "user" SET password_hash = ? WHERE id = ?',
             (password_hash, user_id),
@@ -3178,15 +3143,14 @@ def api_users_reset_password(user_id):
 
 
 @app.route("/api/users/<int:user_id>", methods=["DELETE"])
+@admin_required
 def api_users_delete(user_id):
-    admin = require_role("admin")
-    if not admin:
-        return jsonify({"error": "权限不足"}), 403
+    admin = g.user
     db = get_db()
     with db.get_conn() as conn:
         row = conn.execute('SELECT * FROM "user" WHERE id = ?', (user_id,)).fetchone()
         if not row:
-            return jsonify({"error": "用户不存在"}), 404
+            return api_error("用户不存在", 404)
         target = dict(row)
         is_self = user_id == admin["id"]
         is_last_admin = False
@@ -3197,11 +3161,11 @@ def api_users_delete(user_id):
             if admin_count <= 1:
                 is_last_admin = True
         if is_self and is_last_admin:
-            return jsonify({"error": "不能删除自己（也是系统最后一个管理员）"}), 400
+            return api_error("不能删除自己（也是系统最后一个管理员）", 400)
         if is_last_admin:
-            return jsonify({"error": "不能删除系统最后一个管理员"}), 400
+            return api_error("不能删除系统最后一个管理员", 400)
         if is_self:
-            return jsonify({"error": "不能删除自己"}), 400
+            return api_error("不能删除自己", 400)
         log_activity(conn, admin["id"], "delete_user", "user", user_id,
                      f"删除用户 {dict(row)['employee_id']}")
         conn.execute('DELETE FROM "user" WHERE id = ?', (user_id,))

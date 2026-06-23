@@ -4419,3 +4419,30 @@ class TestConsumablePrinterDisplay:
         app_client.delete(f"/api/assets/{aid}")
         res = app_client.get(f"/api/consumables/{cid}")
         assert res.get_json()["printer_unavailable_reason"] == "deleted"
+
+
+class TestStatsAndApplicationsAuth:
+    """回归：/api/stats 与 GET /api/applications 必须鉴权（admin-only）。
+    此前两端点未登录可读，泄露申请/统计敏感数据；现统一加 @admin_required。"""
+
+    def test_stats_unauthenticated(self, app_client, db):
+        seed_test_data(db)
+        res = app_client.get("/api/stats")
+        assert res.status_code == 403
+
+    def test_stats_employee_forbidden(self, app_client, db):
+        seed_test_data(db)
+        login_employee(app_client)
+        res = app_client.get("/api/stats")
+        assert res.status_code == 403
+
+    def test_applications_list_unauthenticated(self, app_client, db):
+        seed_test_data(db)
+        res = app_client.get("/api/applications")
+        assert res.status_code == 403
+
+    def test_applications_list_employee_forbidden(self, app_client, db):
+        seed_test_data(db)
+        login_employee(app_client)
+        res = app_client.get("/api/applications")
+        assert res.status_code == 403

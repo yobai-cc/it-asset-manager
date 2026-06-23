@@ -26,6 +26,33 @@
 - 移动端隐藏：`.mobile-only { display: none }` + `@media (max-width: 768px) { display: block !important }`
 - 打印隐藏用 `display: none`（不用 `visibility: hidden`）
 
+## 错误响应与鉴权约定
+
+### 错误响应
+
+- 所有 JSON 错误统一用 `api_error(message, status=400)`，返回 `{"error": message}` + HTTP 码
+- 不要手写 `return jsonify({"error": ...}), <码>`；`jsonify()` 仅用于成功响应
+- `api_error()` 是唯一手写 `jsonify({"error": ...})` 的位置（在它的实现内部）
+- DB/校验辅助层（如 `_get_asset_for_update`）不要返回 `(json_response, status)` 元组——抛 `ApiError(message, status)`，由全局 `@app.errorhandler(ApiError)` 统一转 `api_error()`。handler 正常路径用 `api_error()` 显式返回，辅助层用 `ApiError` 抛出
+
+### 鉴权装饰器
+
+- `@login_required`：要求已登录（任意角色）。失败时 API 返回 `api_error("未登录", 401)`、页面重定向到 `/login`
+- `@admin_required`：要求 admin 角色；**未登录或非 admin 都算失败**，API 返回 `api_error("权限不足", 403)`、页面重定向 `/login`（保持原行为——未登录也是 403，不是 401）
+- 装饰器把当前用户写入 `g.user`；handler 首行 `user = g.user` 即可，沿用原 `user["id"]` 等写法
+- 装饰器写在 `@app.route(...)` 与 `def` 之间：
+
+  ```python
+  @app.route("/api/assets", methods=["POST"])
+  @admin_required
+  def api_assets_create():
+      user = g.user
+      ...
+  ```
+
+- 新端点必须用装饰器鉴权，不要在 handler 内手写鉴权分支
+- `current_user()` 保留，供需要自定义可见性校验的场景（如按持有人过滤）使用
+
 ## 数据库变更流程
 
 1. 更新 `SCHEMA` 常量 — 保证新装 `init_db()` 就是完整结构
@@ -43,9 +70,9 @@
 
 ### 新增 API 端点
 
-1. 变更操作成功后调用 `log_activity()`
-2. 认证用 `current_user()` 或 `require_role()`
-3. JSON 响应用 `jsonify()`，CSV 用 `Response()`
+1. 鉴权用 `@admin_required` / `@login_required` 装饰器（用户写入 `g.user`），不要在 handler 内手写鉴权分支
+2. JSON 错误响应用 `api_error(message, status)`，成功响应用 `jsonify()`，CSV 用 `Response()`
+3. 变更操作成功后调用 `log_activity()`
 
 ### 新增页面
 

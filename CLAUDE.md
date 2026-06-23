@@ -494,9 +494,9 @@ const catLabels = {computer:'电脑', monitor:'显示器', ...};
 
 ### 加新 API 端点
 
-1. 如果是变更操作，在成功后调用 `log_activity()`
-2. 需要认证用 `current_user()` 或 `require_role()`
-3. 返回 JSON 用 `jsonify()`，CSV 用 `Response()`
+1. 鉴权用 `@admin_required` / `@login_required` 装饰器（用户写入 `g.user`），详见 CONVENTIONS.md「错误响应与鉴权约定」
+2. 变更操作在成功后调用 `log_activity()`
+3. 返回 JSON 用 `jsonify()`，错误用 `api_error(message, status)`，CSV 用 `Response()`
 4. 分页参数不要直接 `int(request.args...)`；复用 `_parse_positive_int_arg()`，非法参数返回 400，避免 500
 5. 设置写入若还要记录 activity_log，使用 `db.set_config(key, value, conn=conn)`，确保配置与日志在同一事务中提交/回滚
 
