@@ -1,12 +1,13 @@
 # 改动历史
 
-## 未发布（v1.5 之后）
+## 2026-06-24：v1.5.1 内部重构与部署脚本修复
 
-v1.5 之后的代码结构优化，尚未发版。HTTP 契约与外部行为不变，均为内部重构。
+v1.5 之后的内部重构与修复。HTTP 契约与外部 API 行为不变。
 
 - 耗材聚合视图拆分：`api_printers_consumables`（135 行）拆为纯业务 service `_build_printer_consumables_view(conn, ...)` + 薄 handler（解析参数 → 调 service → jsonify）。
 - DB 连接样板消除：新增 `@with_conn` 装饰器（最内层，复用 `Database.get_conn()` 的事务语义——成功 commit / 异常 rollback，含被 `@app.errorhandler(ApiError)` 捕获的异常），64 个 handler 首参即 `conn`，省去 `db = get_db()` + `with db.get_conn() as conn:`；6 个调用 `db.set_config/get_config` 的 handler 保留 `db = get_db()`。例外保持内联 `with`：`current_user()`（helper）、`api_health`（try/except 捕获连接失败转 503）。
 - 列表排序确定性修复：11 处 `ORDER BY <t>.created_at DESC` 缺 `id` 兜底（含分页接口 `/api/assets`、`/api/activity`，同秒记录顺序非确定，可能翻页丢/重记录），统一加 `, <t>.id DESC`，与现有 `consumable_replacement` 查询一致。
+- 部署脚本修复：`deploy.sh` 访问提示改为按 `gunicorn.conf.py` 实际 `bind` 渲染——默认仅监听 `127.0.0.1` 时提示「本机访问 + 配置反向代理」，`--port` 自定义端口绑 `0.0.0.0` 时显示局域网地址；rsync 排除 `android/` 目录。
 - 验证：`pytest tests/ -q` → 310 passed；old-vs-new diff 在 22 个 GET + 9 个写操作上响应全等（时间戳归一后）。server.py 3250 → 3181 行。
 
 ## 2026-06-23：v1.5 鉴权与错误响应集中化重构

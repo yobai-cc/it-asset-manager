@@ -126,6 +126,7 @@ else
         mkdir -p "${APP_DIR}"
         rsync -a --exclude='.venv' --exclude='*.db' --exclude='.secret_key' \
               --exclude='.git' --exclude='__pycache__' --exclude='.hermes' \
+              --exclude='android' \
               "${SCRIPT_DIR}/" "${APP_DIR}/"
         info "代码已复制到 ${APP_DIR}"
     fi
@@ -228,7 +229,17 @@ echo ""
 # 获取本机 IP
 LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "<服务器IP>")
 
-echo -e "  访问地址:  ${CYAN}http://${LOCAL_IP}:${APP_PORT}${NC}"
+# 从 gunicorn.conf.py 读取实际监听地址，让访问提示与真实绑定一致
+# （默认端口走已提交配置 bind=127.0.0.1；--port 自定义端口时脚本改写为 0.0.0.0）
+BIND_HOST=$(grep -E '^bind\s*=' gunicorn.conf.py 2>/dev/null \
+            | sed -E 's/.*"([^:]+):.*/\1/' | head -1)
+BIND_HOST="${BIND_HOST:-127.0.0.1}"
+
+if [[ "${BIND_HOST}" == "0.0.0.0" ]]; then
+    echo -e "  访问地址:  ${CYAN}http://${LOCAL_IP}:${APP_PORT}${NC}"
+else
+    echo -e "  本机访问:  ${CYAN}http://${BIND_HOST}:${APP_PORT}${NC}  ${YELLOW}（仅监听 ${BIND_HOST}，外部访问请配置反向代理 Caddy/Nginx）${NC}"
+fi
 echo ""
 echo "  演示账号:"
 echo "    管理员  admin / admin123"
