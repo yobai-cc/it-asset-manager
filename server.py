@@ -2628,6 +2628,129 @@ def _infer_printer_type(consumables_rows):
     return "mono"
 
 
+def _build_printer_consumables_view(conn, printer_type_filter, warning_only):
+    """构建打印机耗材聚合视图（纯业务逻辑，不含 Flask 请求/响应）。
+
+    按打印机分组返回耗材数据，排除标签打印机；按 printer_type_filter / warning_only 过滤。
+    """
+    # Get all printers with their consumables (toner only)
+    rows = conn.execute("""
+        SELECT a.id as asset_id, a.asset_tag, a.name as printer_name,
+               a.brand, a.model, a.printer_type,
+               pc.id as c_id, pc.name as c_name, pc.type as c_type,
+               pc.stock as c_stock, pc.threshold as c_threshold,
+               pc.color as c_color, pc.model as c_model,
+               pc.current_price as c_current_price,
+               pc.installed_at as c_installed_at,
+               pc.unit as c_unit, pc.notes as c_notes
+        FROM asset a
+        LEFT JOIN printer_consumable pc ON pc.asset_id = a.id AND pc.type = 'toner'
+        WHERE a.category = 'printer' AND a.deleted_at IS NULL AND a.status != 'scrapped'
+        ORDER BY a.id, pc.id
+    """).fetchall()
+
+    # Group by printer
+    printers_map = {}
+    for r in rows:
+        aid = r["asset_id"]
+        if aid not in printers_map:
+            printers_map[aid] = {
+                "asset_id": aid,
+                "asset_tag": r["asset_tag"],
+                "printer_name": r["printer_name"],
+                "brand": r["brand"],
+                "model": r["model"],
+                "printer_type_db": r["printer_type"],
+                "_consumables_raw": [],
+            }
+        if r["c_id"] is not None:
+            printers_map[aid]["_consumables_raw"].append({
+                "id": r["c_id"],
+                "name": r["c_name"],
+                "type": r["c_type"],
+                "stock": r["c_stock"],
+                "threshold": r["c_threshold"],
+                "color": r["c_color"],
+                "model": r["c_model"],
+                "current_price": r["c_current_price"],
+                "installed_at": r["c_installed_at"],
+                "unit": r["c_unit"],
+                "notes": r["c_notes"],
+            })
+
+    # Build final printer list
+    printers = []
+    for p in printers_map.values():
+        # Skip label printers
+        if _is_label_printer(p["printer_name"], p["brand"], p["model"]):
+            continue
+
+        raw_consumables = p["_consumables_raw"]
+        # Use explicit printer_type if set, otherwise infer from consumables
+        explicit_pt = p.get("printer_type_db")
+        if explicit_pt in VALID_PRINTER_TYPES:
+            printer_type = explicit_pt
+        else:
+            printer_type = _infer_printer_type(raw_consumables)
+
+        # Apply printer_type filter
+        if printer_type_filter and printer_type != printer_type_filter:
+            continue
+
+        # Build enriched consumable slots
+        slots = []
+        low_stock_count = 0
+        total_replacements = 0
+        for c in raw_consumables:
+            enriched = _consumable_usage_fields({
+                "id": c["id"], "name": c["name"], "type": c["type"],
+                "stock": c["stock"], "threshold": c["threshold"],
+                "color": c["color"], "model": c["model"],
+                "current_price": c["current_price"],
+                "installed_at": c["installed_at"],
+                "unit": c["unit"], "notes": c["notes"],
+                "asset_id": p["asset_id"],
+                "printer_tag": p["asset_tag"],
+                "printer_name": p["printer_name"],
+            })
+            is_low = c["stock"] <= c["threshold"] and c["threshold"] > 0
+            enriched["is_low_stock"] = is_low
+            if is_low:
+                low_stock_count += 1
+
+            # Get recent replacements for this consumable
+            recent = conn.execute(
+                """SELECT * FROM consumable_replacement
+                   WHERE consumable_id = ? ORDER BY replaced_at DESC LIMIT 5""",
+                (c["id"],),
+            ).fetchall()
+            enriched["recent_replacements"] = [dict(r) for r in recent]
+            total_replacements += len(recent)
+
+            slots.append(enriched)
+
+        has_warning = low_stock_count > 0
+
+        # Apply warning filter
+        if warning_only and not has_warning:
+            continue
+
+        printers.append({
+            "asset_id": p["asset_id"],
+            "asset_tag": p["asset_tag"],
+            "printer_name": p["printer_name"],
+            "printer_type": printer_type,
+            "brand": p["brand"],
+            "model": p["model"],
+            "consumables": slots,
+            "has_warning": has_warning,
+            "total_slots": len(slots),
+            "low_stock_count": low_stock_count,
+            "recent_replacement_count": total_replacements,
+        })
+    return printers
+
+
 @app.route("/api/printers/consumables", methods=["GET"])
 @admin_required
 def api_printers_consumables():
@@ -2637,129 +2760,11 @@ def api_printers_consumables():
       printer_type: "color" | "mono" — 按打印机类型筛选
       warning: "1" — 仅返回有低库存告警的打印机
     """
-    user = g.user
-
     printer_type_filter = request.args.get("printer_type")
     warning_only = request.args.get("warning") == "1"
-
     db = get_db()
     with db.get_conn() as conn:
-        # Get all printers with their consumables (toner only)
-        rows = conn.execute("""
-            SELECT a.id as asset_id, a.asset_tag, a.name as printer_name,
-                   a.brand, a.model, a.printer_type,
-                   pc.id as c_id, pc.name as c_name, pc.type as c_type,
-                   pc.stock as c_stock, pc.threshold as c_threshold,
-                   pc.color as c_color, pc.model as c_model,
-                   pc.current_price as c_current_price,
-                   pc.installed_at as c_installed_at,
-                   pc.unit as c_unit, pc.notes as c_notes
-            FROM asset a
-            LEFT JOIN printer_consumable pc ON pc.asset_id = a.id AND pc.type = 'toner'
-            WHERE a.category = 'printer' AND a.deleted_at IS NULL AND a.status != 'scrapped'
-            ORDER BY a.id, pc.id
-        """).fetchall()
-
-        # Group by printer
-        printers_map = {}
-        for r in rows:
-            aid = r["asset_id"]
-            if aid not in printers_map:
-                printers_map[aid] = {
-                    "asset_id": aid,
-                    "asset_tag": r["asset_tag"],
-                    "printer_name": r["printer_name"],
-                    "brand": r["brand"],
-                    "model": r["model"],
-                    "printer_type_db": r["printer_type"],
-                    "_consumables_raw": [],
-                }
-            if r["c_id"] is not None:
-                printers_map[aid]["_consumables_raw"].append({
-                    "id": r["c_id"],
-                    "name": r["c_name"],
-                    "type": r["c_type"],
-                    "stock": r["c_stock"],
-                    "threshold": r["c_threshold"],
-                    "color": r["c_color"],
-                    "model": r["c_model"],
-                    "current_price": r["c_current_price"],
-                    "installed_at": r["c_installed_at"],
-                    "unit": r["c_unit"],
-                    "notes": r["c_notes"],
-                })
-
-        # Build final printer list
-        printers = []
-        for p in printers_map.values():
-            # Skip label printers
-            if _is_label_printer(p["printer_name"], p["brand"], p["model"]):
-                continue
-
-            raw_consumables = p["_consumables_raw"]
-            # Use explicit printer_type if set, otherwise infer from consumables
-            explicit_pt = p.get("printer_type_db")
-            if explicit_pt in VALID_PRINTER_TYPES:
-                printer_type = explicit_pt
-            else:
-                printer_type = _infer_printer_type(raw_consumables)
-
-            # Apply printer_type filter
-            if printer_type_filter and printer_type != printer_type_filter:
-                continue
-
-            # Build enriched consumable slots
-            slots = []
-            low_stock_count = 0
-            total_replacements = 0
-            for c in raw_consumables:
-                enriched = _consumable_usage_fields({
-                    "id": c["id"], "name": c["name"], "type": c["type"],
-                    "stock": c["stock"], "threshold": c["threshold"],
-                    "color": c["color"], "model": c["model"],
-                    "current_price": c["current_price"],
-                    "installed_at": c["installed_at"],
-                    "unit": c["unit"], "notes": c["notes"],
-                    "asset_id": p["asset_id"],
-                    "printer_tag": p["asset_tag"],
-                    "printer_name": p["printer_name"],
-                })
-                is_low = c["stock"] <= c["threshold"] and c["threshold"] > 0
-                enriched["is_low_stock"] = is_low
-                if is_low:
-                    low_stock_count += 1
-
-                # Get recent replacements for this consumable
-                recent = conn.execute(
-                    """SELECT * FROM consumable_replacement
-                       WHERE consumable_id = ? ORDER BY replaced_at DESC LIMIT 5""",
-                    (c["id"],),
-                ).fetchall()
-                enriched["recent_replacements"] = [dict(r) for r in recent]
-                total_replacements += len(recent)
-
-                slots.append(enriched)
-
-            has_warning = low_stock_count > 0
-
-            # Apply warning filter
-            if warning_only and not has_warning:
-                continue
-
-            printers.append({
-                "asset_id": p["asset_id"],
-                "asset_tag": p["asset_tag"],
-                "printer_name": p["printer_name"],
-                "printer_type": printer_type,
-                "brand": p["brand"],
-                "model": p["model"],
-                "consumables": slots,
-                "has_warning": has_warning,
-                "total_slots": len(slots),
-                "low_stock_count": low_stock_count,
-                "recent_replacement_count": total_replacements,
-            })
-
+        printers = _build_printer_consumables_view(conn, printer_type_filter, warning_only)
     return jsonify({"printers": printers})
 
 
