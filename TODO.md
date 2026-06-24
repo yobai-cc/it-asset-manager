@@ -25,6 +25,7 @@
 
 ## 技术改进
 
+- [x] 后端样板集中化重构：鉴权装饰器（`@admin_required`/`@login_required`）、统一错误响应（`api_error`/`ApiError`）、DB 连接装饰器（`@with_conn`）；大 handler 拆 service（`api_printers_consumables`）→ `server.py` 3250→3181 行
 - [ ] 国际化（当前仅中文界面）
 - [ ] API 接口加分页统一封装，减少重复代码
 - [ ] 前端抽取公共组件（表格、弹窗、分页）减少模板重复
