@@ -18,7 +18,7 @@ IT 固定资产管理追踪系统，面向 IT 管理员。
 - **技术栈**：Python Flask 3.1 + SQLite（原生 SQL）+ Jinja2 + 原生 JS + CSS
 - **无前端框架**：纯 vanilla JS，无构建步骤
 - **部署**：Flask 5000 端口 → Caddy 反向代理 9090 端口（your-server:9090）
-- **规模**：server.py ~3210 行，models.py ~492 行，310 个测试
+- **规模**：server.py ~3180 行，models.py ~492 行，310 个测试
 - **标签打印**：立象 Argox 热转印打印机 + 60×40mm 亚银纸，浏览器直接打印（Logo + 资产信息 + QR）
 
 ## 快速启动
@@ -46,7 +46,7 @@ python3 server.py                   # 启动 http://0.0.0.0:5000
 
 ```
 it-asset-manager/
-├── server.py              # Flask 应用：所有路由 + API（单文件，~3210 行）
+├── server.py              # Flask 应用：所有路由 + API（单文件，~3180 行）
 ├── models.py              # 数据模型、常量、Schema SQL、工具函数（~492 行）
 ├── init_db.py             # 数据库初始化 + 种子数据
 ├── requirements.txt       # Flask, gunicorn, qrcode, Pillow, pytest
@@ -495,9 +495,10 @@ const catLabels = {computer:'电脑', monitor:'显示器', ...};
 ### 加新 API 端点
 
 1. 鉴权用 `@admin_required` / `@login_required` 装饰器（用户写入 `g.user`），详见 CONVENTIONS.md「错误响应与鉴权约定」
-2. 变更操作在成功后调用 `log_activity()`
-3. 返回 JSON 用 `jsonify()`，错误用 `api_error(message, status)`，CSV 用 `Response()`
-4. 分页参数不要直接 `int(request.args...)`；复用 `_parse_positive_int_arg()`，非法参数返回 400，避免 500
+2. DB 访问用 `@with_conn`（handler 首参 `conn`），不要手写 `db = get_db()` + `with db.get_conn() as conn:`
+3. 变更操作在成功后调用 `log_activity()`
+4. 返回 JSON 用 `jsonify()`，错误用 `api_error(message, status)`，CSV 用 `Response()`
+5. 分页参数不要直接 `int(request.args...)`；复用 `_parse_positive_int_arg()`，非法参数返回 400，避免 500
 5. 设置写入若还要记录 activity_log，使用 `db.set_config(key, value, conn=conn)`，确保配置与日志在同一事务中提交/回滚
 
 ### 加新页面

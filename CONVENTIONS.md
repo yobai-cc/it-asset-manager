@@ -53,6 +53,23 @@
 - 新端点必须用装饰器鉴权，不要在 handler 内手写鉴权分支
 - `current_user()` 保留，供需要自定义可见性校验的场景（如按持有人过滤）使用
 
+### DB 连接装饰器
+
+- `@with_conn`：handler 首参即 DB 连接 `conn`，省去 `db = get_db()` + `with db.get_conn() as conn:` 样板。复用 `Database.get_conn()` 的事务语义（成功 commit / 异常 rollback，含被 `@app.errorhandler(ApiError)` 捕获的异常），与原内联 `with` 行为一致
+- 写在鉴权装饰器之下、`def` 之上（最内层），保证鉴权失败时不打开连接：
+
+  ```python
+  @app.route("/api/assets/<int:asset_id>/return", methods=["POST"])
+  @admin_required
+  @with_conn
+  def api_return(conn, asset_id):
+      user = g.user
+      ...conn.execute(...)...
+  ```
+
+- handler 内还需要 `Database` 对象（如 `db.set_config(conn=conn)`、`db.get_config()`）时，保留 `db = get_db()`
+- 例外（保持内联 `with db.get_conn()`）：`current_user()`（helper，由鉴权装饰器调用）、`api_health`（try/except 捕获连接失败转 503，依赖 `with` 在函数体内）
+
 ## 数据库变更流程
 
 1. 更新 `SCHEMA` 常量 — 保证新装 `init_db()` 就是完整结构
@@ -71,8 +88,9 @@
 ### 新增 API 端点
 
 1. 鉴权用 `@admin_required` / `@login_required` 装饰器（用户写入 `g.user`），不要在 handler 内手写鉴权分支
-2. JSON 错误响应用 `api_error(message, status)`，成功响应用 `jsonify()`，CSV 用 `Response()`
-3. 变更操作成功后调用 `log_activity()`
+2. DB 访问用 `@with_conn`（handler 首参 `conn`），不要手写 `db = get_db()` + `with db.get_conn() as conn:`
+3. JSON 错误响应用 `api_error(message, status)`，成功响应用 `jsonify()`，CSV 用 `Response()`
+4. 变更操作成功后调用 `log_activity()`
 
 ### 新增页面
 
